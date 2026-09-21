@@ -59,13 +59,23 @@ type Controller struct {
 
 // NewController creates a pod controller
 func NewController(ctx context.Context, config *argoConfig.Config, restConfig *rest.Config, namespace string, clientSet kubernetes.Interface, wfInformer cache.SharedIndexInformer, metrics *metrics.Metrics, callback podEventCallback) *Controller {
+	return NewControllerForNamespaces(ctx, config, restConfig, namespace, nil, clientSet, wfInformer, metrics, callback)
+}
+
+func NewControllerForNamespaces(ctx context.Context, config *argoConfig.Config, restConfig *rest.Config, namespace string, namespaces []string, clientSet kubernetes.Interface, wfInformer cache.SharedIndexInformer, metrics *metrics.Metrics, callback podEventCallback) *Controller {
 	ctx, log := logging.RequireLoggerFromContext(ctx).WithField("component", "pod_controller").InContext(ctx)
+	podInformer := newInformer(clientSet, &config.InstanceID, &namespace)
+	if len(namespaces) > 0 {
+		podInformer = informerutil.NewMultiNamespaceInformer(namespaces, func(namespace string) cache.SharedIndexInformer {
+			return newInformer(clientSet, &config.InstanceID, &namespace)
+		})
+	}
 	podController := &Controller{
 		config:        config,
 		kubeclientset: clientSet,
 		wfInformer:    wfInformer,
 		workqueue:     metrics.RateLimiterWithBusyWorkers(ctx, workqueue.DefaultTypedControllerRateLimiter[string](), "pod_cleanup_queue"),
-		podInformer:   newInformer(clientSet, &config.InstanceID, &namespace),
+		podInformer:   podInformer,
 		log:           log,
 		callBack:      callback,
 		restConfig:    restConfig,

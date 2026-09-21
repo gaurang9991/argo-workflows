@@ -8,8 +8,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"k8s.io/client-go/informers"
+	coreinformers "k8s.io/client-go/informers/core/v1"
 	"k8s.io/client-go/kubernetes"
 	v1 "k8s.io/client-go/listers/core/v1"
+	clientcache "k8s.io/client-go/tools/cache"
+
+	informerutil "github.com/argoproj/argo-workflows/v4/util/informer"
 )
 
 type ResourceCache struct {
@@ -17,6 +21,7 @@ type ResourceCache struct {
 	client kubernetes.Interface
 	v1.ServiceAccountLister
 	informerFactory informers.SharedInformerFactory
+	informer        clientcache.SharedIndexInformer
 }
 
 func NewResourceCacheWithTimeout(client kubernetes.Interface, namespace string, timeout time.Duration) *ResourceCache {
@@ -34,7 +39,27 @@ func NewResourceCache(client kubernetes.Interface, namespace string) *ResourceCa
 	return NewResourceCacheWithTimeout(client, namespace, time.Minute*1)
 }
 
+func NewResourceCacheForNamespaces(client kubernetes.Interface, namespace string, namespaces []string) *ResourceCache {
+	if len(namespaces) == 0 {
+		return NewResourceCache(client, namespace)
+	}
+	informer := informerutil.NewMultiNamespaceInformer(namespaces, func(namespace string) clientcache.SharedIndexInformer {
+		return coreinformers.NewFilteredServiceAccountInformer(client, namespace, time.Minute*20, clientcache.Indexers{clientcache.NamespaceIndex: clientcache.MetaNamespaceIndexFunc}, nil)
+	})
+	return &ResourceCache{
+		cache:                NewLRUTtlCache(time.Minute*1, 2000),
+		client:               client,
+		ServiceAccountLister: v1.NewServiceAccountLister(informer.GetIndexer()),
+		informer:             informer,
+	}
+}
+
 func (c *ResourceCache) Run(stopCh <-chan struct{}) {
+	if c.informer != nil {
+		go c.informer.Run(stopCh)
+		clientcache.WaitForCacheSync(stopCh, c.informer.HasSynced)
+		return
+	}
 	c.informerFactory.Start(stopCh)
 	c.informerFactory.WaitForCacheSync(stopCh)
 }

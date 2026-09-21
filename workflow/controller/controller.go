@@ -95,8 +95,9 @@ type lastWrittenVersions struct {
 // WorkflowController is the controller for workflow resources
 type WorkflowController struct {
 	// namespace of the workflow controller
-	namespace        string
-	managedNamespace string
+	namespace         string
+	managedNamespace  string
+	managedNamespaces []string
 
 	configController config.Controller
 	// Config is the workflow controller's configuration
@@ -181,8 +182,8 @@ type WorkflowController struct {
 	eventRecorderManager       events.EventRecorderManager
 	archiveLabelSelector       labels.Selector
 	cacheFactory               controllercache.Factory
-	wfTaskSetInformer          wfextvv1alpha1.WorkflowTaskSetInformer
-	artGCTaskInformer          wfextvv1alpha1.WorkflowArtifactGCTaskInformer
+	wfTaskSetInformer          cache.SharedIndexInformer
+	artGCTaskInformer          cache.SharedIndexInformer
 	taskResultInformer         cache.SharedIndexInformer
 
 	// progressPatchTickDuration defines how often the executor will patch pod annotations if an updated progress is found.
@@ -210,7 +211,7 @@ const (
 )
 
 // NewWorkflowController instantiates a new WorkflowController
-func NewWorkflowController(ctx context.Context, restConfig *rest.Config, kubeclientset kubernetes.Interface, wfclientset wfclientset.Interface, namespace, managedNamespace, executorImage, executorImagePullPolicy, executorLogFormat, configMap string, executorPlugins bool, workflowLevelExecutorPlugins bool) (*WorkflowController, error) {
+func NewWorkflowController(ctx context.Context, restConfig *rest.Config, kubeclientset kubernetes.Interface, wfclientset wfclientset.Interface, namespace, managedNamespace string, managedNamespaces []string, executorImage, executorImagePullPolicy, executorLogFormat, configMap string, executorPlugins bool, workflowLevelExecutorPlugins bool) (*WorkflowController, error) {
 	dynamicInterface, err := dynamic.NewForConfig(restConfig)
 	if err != nil {
 		return nil, err
@@ -233,6 +234,7 @@ func NewWorkflowController(ctx context.Context, restConfig *rest.Config, kubecli
 		wfclientset:                wfclientset,
 		namespace:                  namespace,
 		managedNamespace:           managedNamespace,
+		managedNamespaces:          managedNamespaces,
 		cliExecutorImage:           executorImage,
 		cliExecutorImagePullPolicy: executorImagePullPolicy,
 		cliExecutorLogFormat:       executorLogFormat,
@@ -323,7 +325,7 @@ func (wfc *WorkflowController) runPodController(ctx context.Context, podGCWorker
 func (wfc *WorkflowController) runCronController(ctx context.Context, cronWorkflowWorkers int) {
 	defer runtimeutil.HandleCrashWithContext(ctx, runtimeutil.PanicHandlers...)
 
-	cronController := cron.NewCronController(ctx, wfc.wfclientset, wfc.dynamicInterface, wfc.namespace, wfc.GetManagedNamespace(), wfc.Config.InstanceID, wfc.metrics, wfc.eventRecorderManager, cronWorkflowWorkers, wfc.wftmplInformer, wfc.cwftmplInformer, wfc.Config.WorkflowDefaults)
+	cronController := cron.NewCronController(ctx, wfc.wfclientset, wfc.dynamicInterface, wfc.namespace, wfc.GetManagedNamespace(), wfc.managedNamespaces, wfc.Config.InstanceID, wfc.metrics, wfc.eventRecorderManager, cronWorkflowWorkers, wfc.wftmplInformer, wfc.cwftmplInformer, wfc.Config.WorkflowDefaults)
 	cronController.Run(ctx)
 }
 
@@ -397,13 +399,20 @@ func (wfc *WorkflowController) Run(ctx context.Context, wfWorkers, workflowTTLWo
 		"workflowArchive":     wfArchiveWorkers,
 	}).Info(ctx, "Current Worker Numbers")
 
-	wfc.wfInformer = util.NewWorkflowInformer(ctx, wfc.dynamicInterface, wfc.GetManagedNamespace(), workflowResyncPeriod, wfc.tweakListRequestListOptions, wfc.tweakWatchRequestListOptions, newIndexers(wfc.indexWorkflowSemaphoreKeys))
+	newWorkflowInformer := func(namespace string) cache.SharedIndexInformer {
+		return util.NewWorkflowInformer(ctx, wfc.dynamicInterface, namespace, workflowResyncPeriod, wfc.tweakListRequestListOptions, wfc.tweakWatchRequestListOptions, newIndexers(wfc.indexWorkflowSemaphoreKeys))
+	}
+	if len(wfc.managedNamespaces) > 0 {
+		wfc.wfInformer = informerutil.NewMultiNamespaceInformer(wfc.managedNamespaces, newWorkflowInformer)
+	} else {
+		wfc.wfInformer = newWorkflowInformer(wfc.GetManagedNamespace())
+	}
 	nsInformer, err := wfc.newNamespaceInformer(ctx, wfc.kubeclientset)
 	if err != nil {
 		logger.WithError(err).WithFatal().Error(ctx, "Failed to create namespace informer")
 	}
 	wfc.nsInformer = nsInformer
-	wfc.wftmplInformer = informer.NewTolerantWorkflowTemplateInformer(wfc.dynamicInterface, workflowTemplateResyncPeriod, wfc.managedNamespace)
+	wfc.wftmplInformer = informer.NewTolerantWorkflowTemplateInformerForNamespaces(wfc.dynamicInterface, workflowTemplateResyncPeriod, wfc.GetManagedNamespace(), wfc.managedNamespaces)
 
 	wfc.wfTaskSetInformer = wfc.newWorkflowTaskSetInformer()
 	wfc.artGCTaskInformer = wfc.newArtGCTaskInformer()
@@ -412,7 +421,7 @@ func (wfc *WorkflowController) Run(ctx context.Context, wfWorkers, workflowTTLWo
 	if err != nil {
 		logger.WithError(err).WithFatal().Error(ctx, "Failed to add workflow informer handlers")
 	}
-	wfc.PodController = pod.NewController(ctx, &wfc.Config, wfc.restConfig, wfc.GetManagedNamespace(), wfc.kubeclientset, wfc.wfInformer, wfc.metrics, wfc.enqueueWfFromPodLabel)
+	wfc.PodController = pod.NewControllerForNamespaces(ctx, &wfc.Config, wfc.restConfig, wfc.GetManagedNamespace(), wfc.managedNamespaces, wfc.kubeclientset, wfc.wfInformer, wfc.metrics, wfc.enqueueWfFromPodLabel)
 
 	wfc.updateEstimatorFactory(ctx)
 
@@ -436,8 +445,8 @@ func (wfc *WorkflowController) Run(ctx context.Context, wfWorkers, workflowTTLWo
 	go wfc.wfInformer.Run(ctx.Done())
 	go wfc.wftmplInformer.Informer().Run(ctx.Done())
 	go wfc.typedConfigMapInformer.Run(ctx.Done())
-	go wfc.wfTaskSetInformer.Informer().Run(ctx.Done())
-	go wfc.artGCTaskInformer.Informer().Run(ctx.Done())
+	go wfc.wfTaskSetInformer.Run(ctx.Done())
+	go wfc.artGCTaskInformer.Run(ctx.Done())
 	go wfc.taskResultInformer.Run(ctx.Done())
 	wfc.createClusterWorkflowTemplateInformer(ctx)
 	go wfc.runPodController(ctx, podCleanupWorkers)
@@ -452,8 +461,8 @@ func (wfc *WorkflowController) Run(ctx context.Context, wfWorkers, workflowTTLWo
 		wfc.PodController.HasSynced(),
 		wfc.typedConfigMapInformer.HasSynced,
 		semaphoreConfigMapInformerHasSynced,
-		wfc.wfTaskSetInformer.Informer().HasSynced,
-		wfc.artGCTaskInformer.Informer().HasSynced,
+		wfc.wfTaskSetInformer.HasSynced,
+		wfc.artGCTaskInformer.HasSynced,
 		wfc.taskResultInformer.HasSynced,
 	) {
 		logger.WithFatal().Error(ctx, "Timed out waiting for caches to sync")
@@ -543,9 +552,13 @@ func (wfc *WorkflowController) initManagers(ctx context.Context) error {
 		labelSelector = labelSelector.Add(*req)
 	}
 	listOpts := metav1.ListOptions{LabelSelector: labelSelector.String()}
-	wfList, err := wfc.wfclientset.ArgoprojV1alpha1().Workflows(wfc.GetManagedNamespace()).List(ctx, listOpts)
-	if err != nil {
-		return err
+	wfList := &wfv1.WorkflowList{}
+	for _, namespace := range wfc.GetManagedNamespaces() {
+		list, err := wfc.wfclientset.ArgoprojV1alpha1().Workflows(namespace).List(ctx, listOpts)
+		if err != nil {
+			return err
+		}
+		wfList.Items = append(wfList.Items, list.Items...)
 	}
 
 	// A non-nil error means a recorded lock holder could not be re-established
@@ -662,10 +675,13 @@ func startOptionalInformer(ctx context.Context, informer cache.SharedIndexInform
 // change and re-evaluate on their normal requeue cycle instead.
 func (wfc *WorkflowController) newSemaphoreConfigMapInformer(ctx context.Context) cache.SharedIndexInformer {
 	ctx, logger := logging.RequireLoggerFromContext(ctx).WithField("component", "semaphore_config_watcher").InContext(ctx)
-	can, err := authutil.CanI(ctx, wfc.kubeclientset, []string{"list", "watch"}, "", wfc.GetManagedNamespace(), "configmaps")
-	if err != nil || !can {
-		logger.WithError(err).WithField("namespace", wfc.GetManagedNamespace()).Warn(ctx, "was unable to get permissions for list/watch verbs on configmaps, workflows will not be requeued when semaphore configmaps change")
-		return nil
+	namespaces := wfc.GetManagedNamespaces()
+	for _, namespace := range namespaces {
+		can, err := authutil.CanI(ctx, wfc.kubeclientset, []string{"list", "watch"}, "", namespace, "configmaps")
+		if err != nil || !can {
+			logger.WithError(err).WithField("namespace", namespace).Warn(ctx, "was unable to get permissions for list/watch verbs on configmaps, workflows will not be requeued when semaphore configmaps change")
+			return nil
+		}
 	}
 	// This informer watches all configmaps in the managed namespace (the whole cluster for
 	// a cluster-scoped install), as semaphore configmaps cannot be identified by a label
@@ -676,7 +692,13 @@ func (wfc *WorkflowController) newSemaphoreConfigMapInformer(ctx context.Context
 	// resyncPeriod 0: resyncs replay the store as same-resource-version updates, which
 	// the RV-equality guard in UpdateFunc drops, so periodic resyncs would only be a
 	// pointless walk of every configmap in scope
-	informer := metadatainformer.NewFilteredMetadataInformer(wfc.metadataInterface, apiv1.SchemeGroupVersion.WithResource("configmaps"), wfc.GetManagedNamespace(), 0, cache.Indexers{}, nil).Informer()
+	newInformer := func(namespace string) cache.SharedIndexInformer {
+		return metadatainformer.NewFilteredMetadataInformer(wfc.metadataInterface, apiv1.SchemeGroupVersion.WithResource("configmaps"), namespace, 0, cache.Indexers{}, nil).Informer()
+	}
+	informer := newInformer(wfc.GetManagedNamespace())
+	if len(wfc.managedNamespaces) > 0 {
+		informer = informerutil.NewMultiNamespaceInformer(wfc.managedNamespaces, newInformer)
+	}
 	//nolint:errcheck // the error only happens if the informer was already started, and it hasn't been
 	informer.SetTransform(func(obj any) (any, error) {
 		m, ok := obj.(*metav1.PartialObjectMetadata)
@@ -812,10 +834,16 @@ func (wfc *WorkflowController) workflowGarbageCollector(ctx context.Context) {
 		case <-ticker.C:
 			if wfc.offloadNodeStatusRepo.IsEnabled() {
 				logger.Info(ctx, "Performing periodic workflow GC")
-				oldRecords, err := wfc.offloadNodeStatusRepo.ListOldOffloads(ctx, wfc.GetManagedNamespace())
-				if err != nil {
-					logger.WithField("err", err).Error(ctx, "Failed to list old offloaded nodes")
-					continue
+				oldRecords := map[string][]string{}
+				for _, namespace := range wfc.GetManagedNamespaces() {
+					records, err := wfc.offloadNodeStatusRepo.ListOldOffloads(ctx, namespace)
+					if err != nil {
+						logger.WithField("err", err).WithField("namespace", namespace).Error(ctx, "Failed to list old offloaded nodes")
+						continue
+					}
+					for uid, versions := range records {
+						oldRecords[uid] = versions
+					}
 				}
 				logger.WithField("len_wfs", len(oldRecords)).Info(ctx, "Deleting old offloads that are not live")
 				for uid, versions := range oldRecords {
@@ -1311,9 +1339,10 @@ func (wfc *WorkflowController) addWorkflowInformerHandlers(ctx context.Context) 
 					// key function.
 
 					// Remove finalizers from Pods if they exist before deletion
-					pods := wfc.kubeclientset.CoreV1().Pods(wfc.GetManagedNamespace())
+					workflow := obj.(*unstructured.Unstructured)
+					pods := wfc.kubeclientset.CoreV1().Pods(workflow.GetNamespace())
 					podList, err := pods.List(ctx, metav1.ListOptions{
-						LabelSelector: fmt.Sprintf("%s=%s", common.LabelKeyWorkflow, obj.(*unstructured.Unstructured).GetName()),
+						LabelSelector: fmt.Sprintf("%s=%s", common.LabelKeyWorkflow, workflow.GetName()),
 					})
 					if err != nil {
 						logger.WithError(err).Error(ctx, "Failed to list pods")
@@ -1443,11 +1472,17 @@ func (wfc *WorkflowController) instanceIDReq() labels.Requirement {
 }
 
 func (wfc *WorkflowController) newTypedConfigMapInformer(ctx context.Context) cache.SharedIndexInformer {
-	indexInformer := v1.NewFilteredConfigMapInformer(wfc.kubeclientset, wfc.GetManagedNamespace(), configMapResyncPeriod, cache.Indexers{
-		indexes.ConfigMapLabelsIndex: indexes.ConfigMapIndexFunc,
-	}, func(opts *metav1.ListOptions) {
-		opts.LabelSelector = common.LabelKeyConfigMapType
-	})
+	newInformer := func(namespace string) cache.SharedIndexInformer {
+		return v1.NewFilteredConfigMapInformer(wfc.kubeclientset, namespace, configMapResyncPeriod, cache.Indexers{
+			indexes.ConfigMapLabelsIndex: indexes.ConfigMapIndexFunc,
+		}, func(opts *metav1.ListOptions) {
+			opts.LabelSelector = common.LabelKeyConfigMapType
+		})
+	}
+	indexInformer := newInformer(wfc.GetManagedNamespace())
+	if len(wfc.managedNamespaces) > 0 {
+		indexInformer = informerutil.NewMultiNamespaceInformer(wfc.managedNamespaces, newInformer)
+	}
 	//nolint:errcheck // the error only happens if the informer was already started, and it hasn't been
 	indexInformer.SetTransform(informerutil.StripManagedFields)
 	ctx, logger := logging.RequireLoggerFromContext(ctx).WithField("component", "config_map_informer").InContext(ctx)
@@ -1539,6 +1574,13 @@ func (wfc *WorkflowController) GetManagedNamespace() string {
 	return wfc.Config.Namespace
 }
 
+func (wfc *WorkflowController) GetManagedNamespaces() []string {
+	if len(wfc.managedNamespaces) > 0 {
+		return wfc.managedNamespaces
+	}
+	return []string{wfc.GetManagedNamespace()}
+}
+
 func (wfc *WorkflowController) getMaxStackDepth() int {
 	return maxAllowedStackDepth
 }
@@ -1623,18 +1665,24 @@ func (wfc *WorkflowController) getPodPhaseMetrics(ctx context.Context) map[strin
 	return make(map[string]int64)
 }
 
-func (wfc *WorkflowController) newWorkflowTaskSetInformer() wfextvv1alpha1.WorkflowTaskSetInformer {
-	informer := externalversions.NewSharedInformerFactoryWithOptions(
-		wfc.wfclientset,
-		workflowTaskSetResyncPeriod,
-		externalversions.WithNamespace(wfc.GetManagedNamespace()),
-		externalversions.WithTweakListOptions(func(x *metav1.ListOptions) {
-			r := util.InstanceIDRequirement(wfc.Config.InstanceID)
-			x.LabelSelector = r.String()
-		}),
-		externalversions.WithTransform(informerutil.StripManagedFields)).Argoproj().V1alpha1().WorkflowTaskSets()
+func (wfc *WorkflowController) newWorkflowTaskSetInformer() cache.SharedIndexInformer {
+	newInformer := func(namespace string) cache.SharedIndexInformer {
+		return externalversions.NewSharedInformerFactoryWithOptions(
+			wfc.wfclientset,
+			workflowTaskSetResyncPeriod,
+			externalversions.WithNamespace(namespace),
+			externalversions.WithTweakListOptions(func(x *metav1.ListOptions) {
+				r := util.InstanceIDRequirement(wfc.Config.InstanceID)
+				x.LabelSelector = r.String()
+			}),
+			externalversions.WithTransform(informerutil.StripManagedFields)).Argoproj().V1alpha1().WorkflowTaskSets().Informer()
+	}
+	informer := newInformer(wfc.GetManagedNamespace())
+	if len(wfc.managedNamespaces) > 0 {
+		informer = informerutil.NewMultiNamespaceInformer(wfc.managedNamespaces, newInformer)
+	}
 	//nolint:errcheck // the error only happens if the informer was stopped, and it hasn't even started (https://github.com/kubernetes/client-go/blob/46588f2726fa3e25b1704d6418190f424f95a990/tools/cache/shared_informer.go#L580)
-	informer.Informer().AddEventHandler(
+	informer.AddEventHandler(
 		cache.ResourceEventHandlerFuncs{
 			UpdateFunc: func(old, newObj any) {
 				key, err := cache.MetaNamespaceKeyFunc(newObj)
@@ -1646,18 +1694,24 @@ func (wfc *WorkflowController) newWorkflowTaskSetInformer() wfextvv1alpha1.Workf
 	return informer
 }
 
-func (wfc *WorkflowController) newArtGCTaskInformer() wfextvv1alpha1.WorkflowArtifactGCTaskInformer {
-	informer := externalversions.NewSharedInformerFactoryWithOptions(
-		wfc.wfclientset,
-		workflowTaskSetResyncPeriod,
-		externalversions.WithNamespace(wfc.GetManagedNamespace()),
-		externalversions.WithTweakListOptions(func(x *metav1.ListOptions) {
-			r := util.InstanceIDRequirement(wfc.Config.InstanceID)
-			x.LabelSelector = r.String()
-		}),
-		externalversions.WithTransform(informerutil.StripManagedFields)).Argoproj().V1alpha1().WorkflowArtifactGCTasks()
+func (wfc *WorkflowController) newArtGCTaskInformer() cache.SharedIndexInformer {
+	newInformer := func(namespace string) cache.SharedIndexInformer {
+		return externalversions.NewSharedInformerFactoryWithOptions(
+			wfc.wfclientset,
+			workflowTaskSetResyncPeriod,
+			externalversions.WithNamespace(namespace),
+			externalversions.WithTweakListOptions(func(x *metav1.ListOptions) {
+				r := util.InstanceIDRequirement(wfc.Config.InstanceID)
+				x.LabelSelector = r.String()
+			}),
+			externalversions.WithTransform(informerutil.StripManagedFields)).Argoproj().V1alpha1().WorkflowArtifactGCTasks().Informer()
+	}
+	informer := newInformer(wfc.GetManagedNamespace())
+	if len(wfc.managedNamespaces) > 0 {
+		informer = informerutil.NewMultiNamespaceInformer(wfc.managedNamespaces, newInformer)
+	}
 	//nolint:errcheck // the error only happens if the informer was stopped, and it hasn't even started (https://github.com/kubernetes/client-go/blob/46588f2726fa3e25b1704d6418190f424f95a990/tools/cache/shared_informer.go#L580)
-	informer.Informer().AddEventHandler(
+	informer.AddEventHandler(
 		cache.ResourceEventHandlerFuncs{
 			UpdateFunc: func(old, newObj any) {
 				key, err := cache.MetaNamespaceKeyFunc(newObj)

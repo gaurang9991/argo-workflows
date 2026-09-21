@@ -7,7 +7,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
-	"k8s.io/client-go/informers"
 	"k8s.io/client-go/tools/cache"
 
 	"github.com/argoproj/argo-workflows/v4/pkg/apis/workflow"
@@ -17,7 +16,8 @@ import (
 )
 
 type tolerantWorkflowTemplateInformer struct {
-	delegate informers.GenericInformer
+	informer cache.SharedIndexInformer
+	lister   cache.GenericLister
 }
 
 // NewTolerantWorkflowTemplateInformer is a drop-in replacement for `extwfv1.WorkflowTemplateInformer` that ignores malformed resources.
@@ -32,13 +32,27 @@ func NewTolerantWorkflowTemplateInformer(dynamicInterface dynamic.Interface, def
 	}).ForResource(schema.GroupVersionResource{Group: workflow.Group, Version: workflow.Version, Resource: workflow.WorkflowTemplatePlural})
 	//nolint:errcheck // the error only happens if the informer was already started, and it hasn't been
 	delegate.Informer().SetTransform(informerutil.StripManagedFields)
-	return &tolerantWorkflowTemplateInformer{delegate: delegate}
+	return &tolerantWorkflowTemplateInformer{informer: delegate.Informer(), lister: delegate.Lister()}
+}
+
+func NewTolerantWorkflowTemplateInformerForNamespaces(dynamicInterface dynamic.Interface, defaultResync time.Duration, namespace string, namespaces []string) extwfv1.WorkflowTemplateInformer {
+	if len(namespaces) == 0 {
+		return NewTolerantWorkflowTemplateInformer(dynamicInterface, defaultResync, namespace)
+	}
+	resource := schema.GroupVersionResource{Group: workflow.Group, Version: workflow.Version, Resource: workflow.WorkflowTemplatePlural}
+	multiInformer := informerutil.NewMultiNamespaceInformer(namespaces, func(namespace string) cache.SharedIndexInformer {
+		return NewTolerantWorkflowTemplateInformer(dynamicInterface, defaultResync, namespace).Informer()
+	})
+	return &tolerantWorkflowTemplateInformer{
+		informer: multiInformer,
+		lister:   cache.NewGenericLister(multiInformer.GetIndexer(), resource.GroupResource()),
+	}
 }
 
 func (t *tolerantWorkflowTemplateInformer) Informer() cache.SharedIndexInformer {
-	return t.delegate.Informer()
+	return t.informer
 }
 
 func (t *tolerantWorkflowTemplateInformer) Lister() v1alpha1.WorkflowTemplateLister {
-	return &tolerantWorkflowTemplateLister{delegate: t.delegate.Lister()}
+	return &tolerantWorkflowTemplateLister{delegate: t.lister}
 }

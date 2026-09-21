@@ -61,7 +61,7 @@ type workflowServer struct {
 	hydrator              hydrator.Interface
 	wfArchive             sqldb.WorkflowArchive
 	wfLister              store.WorkflowLister
-	wfReflector           *cache.Reflector
+	wfReflectors          []*cache.Reflector
 	wftmplStore           servertypes.WorkflowTemplateStore
 	cwftmplStore          servertypes.ClusterWorkflowTemplateStore
 	wfDefaults            *wfv1.Workflow
@@ -72,6 +72,10 @@ var _ Server = &workflowServer{}
 
 // NewServer returns a new Server
 func NewServer(ctx context.Context, instanceIDService instanceid.Service, offloadNodeStatusRepo sqldb.OffloadNodeStatusRepo, wfArchive sqldb.WorkflowArchive, wfClientSet versioned.Interface, wfLister store.WorkflowLister, wfStore store.WorkflowStore, wftmplStore servertypes.WorkflowTemplateStore, cwftmplStore servertypes.ClusterWorkflowTemplateStore, wfDefaults *wfv1.Workflow, namespace *string, artifactRepositories artifactrepositories.Interface) Server {
+	return NewServerForNamespaces(ctx, instanceIDService, offloadNodeStatusRepo, wfArchive, wfClientSet, wfLister, wfStore, wftmplStore, cwftmplStore, wfDefaults, namespace, nil, artifactRepositories)
+}
+
+func NewServerForNamespaces(ctx context.Context, instanceIDService instanceid.Service, offloadNodeStatusRepo sqldb.OffloadNodeStatusRepo, wfArchive sqldb.WorkflowArchive, wfClientSet versioned.Interface, wfLister store.WorkflowLister, wfStore store.WorkflowStore, wftmplStore servertypes.WorkflowTemplateStore, cwftmplStore servertypes.ClusterWorkflowTemplateStore, wfDefaults *wfv1.Workflow, namespace *string, namespaces []string, artifactRepositories artifactrepositories.Interface) Server {
 	ws := &workflowServer{
 		instanceIDService:     instanceIDService,
 		offloadNodeStatusRepo: offloadNodeStatusRepo,
@@ -84,24 +88,36 @@ func NewServer(ctx context.Context, instanceIDService instanceid.Service, offloa
 		artifactRepositories:  artifactRepositories,
 	}
 	if wfStore != nil && namespace != nil {
-		lw := &cache.ListWatch{
-			ListWithContextFunc: func(ctx context.Context, options metav1.ListOptions) (runtime.Object, error) {
-				return wfClientSet.ArgoprojV1alpha1().Workflows(*namespace).List(ctx, options)
-			},
-			WatchFuncWithContext: func(ctx context.Context, options metav1.ListOptions) (watch.Interface, error) {
-				return wfClientSet.ArgoprojV1alpha1().Workflows(*namespace).Watch(ctx, options)
-			},
+		watchNamespaces := []string{*namespace}
+		if len(namespaces) > 0 {
+			watchNamespaces = namespaces
 		}
-		wfReflector := cache.NewReflector(lw, &wfv1.Workflow{}, wfStore, reSyncDuration)
-		ws.wfReflector = wfReflector
+		for _, watchNamespace := range watchNamespaces {
+			watchNamespace := watchNamespace
+			lw := &cache.ListWatch{
+				ListWithContextFunc: func(ctx context.Context, options metav1.ListOptions) (runtime.Object, error) {
+					return wfClientSet.ArgoprojV1alpha1().Workflows(watchNamespace).List(ctx, options)
+				},
+				WatchFuncWithContext: func(ctx context.Context, options metav1.ListOptions) (watch.Interface, error) {
+					return wfClientSet.ArgoprojV1alpha1().Workflows(watchNamespace).Watch(ctx, options)
+				},
+			}
+			ws.wfReflectors = append(ws.wfReflectors, cache.NewReflector(lw, &wfv1.Workflow{}, wfStore, reSyncDuration))
+		}
 	}
 	return ws
 }
 
 func (s *workflowServer) Run(stopCh <-chan struct{}) {
-	if s.wfReflector != nil {
-		s.wfReflector.Run(stopCh)
+	var waitGroup sync.WaitGroup
+	for _, reflector := range s.wfReflectors {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			reflector.Run(stopCh)
+		}()
 	}
+	waitGroup.Wait()
 }
 
 func (s *workflowServer) CreateWorkflow(ctx context.Context, req *workflowpkg.WorkflowCreateRequest) (*wfv1.Workflow, error) {
@@ -258,8 +274,8 @@ func (s *workflowServer) ListWorkflows(ctx context.Context, req *workflowpkg.Wor
 		wfs = append(wfs, archivedWfList...)
 	}
 	meta := metav1.ListMeta{ResourceVersion: liveWfList.ResourceVersion}
-	if s.wfReflector != nil {
-		meta.ResourceVersion = s.wfReflector.LastSyncResourceVersion()
+	if len(s.wfReflectors) == 1 {
+		meta.ResourceVersion = s.wfReflectors[0].LastSyncResourceVersion()
 	}
 	var remainCount int64
 	if options.ShowRemainingItemCount {

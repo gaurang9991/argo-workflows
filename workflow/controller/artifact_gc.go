@@ -423,7 +423,7 @@ func (woc *wfOperationCtx) addTemplateArtifactsToTasks(ctx context.Context, podN
 // find WorkflowArtifactGCTask CRD object by name
 func (woc *wfOperationCtx) getArtifactTask(taskName string) (*wfv1.WorkflowArtifactGCTask, error) {
 	key := woc.wf.Namespace + "/" + taskName
-	task, exists, err := woc.controller.artGCTaskInformer.Informer().GetIndexer().GetByKey(key)
+	task, exists, err := woc.controller.artGCTaskInformer.GetIndexer().GetByKey(key)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get WorkflowArtifactGCTask by key %q: %w", key, err)
 	}

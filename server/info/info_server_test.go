@@ -32,7 +32,8 @@ func Test_infoServer_GetUserInfo(t *testing.T) {
 func Test_infoServer_GetInfo(t *testing.T) {
 	t.Run("Ful Fields", func(t *testing.T) {
 		i := &infoServer{
-			managedNamespace: "argo",
+			managedNamespace:  "argo",
+			managedNamespaces: []string{"team-a", "team-b"},
 			links: []*wfv1.Link{
 				{Name: "link-name", Scope: "scope", URL: "https://example.com"},
 			},
@@ -45,6 +46,7 @@ func Test_infoServer_GetInfo(t *testing.T) {
 		info, err := i.GetInfo(ctx, nil)
 		require.NoError(t, err)
 		assert.Equal(t, "argo", info.ManagedNamespace)
+		assert.Equal(t, []string{"team-a", "team-b"}, info.ManagedNamespaces)
 		assert.Equal(t, "link-name", info.Links[0].Name)
 		assert.Equal(t, "red", info.NavColor)
 		assert.Equal(t, "Workflow Completed", info.Columns[0].Name)
@@ -58,6 +60,7 @@ func Test_infoServer_GetInfo(t *testing.T) {
 		info, err := i.GetInfo(ctx, nil)
 		require.NoError(t, err)
 		assert.Empty(t, info.ManagedNamespace)
+		assert.Empty(t, info.ManagedNamespaces)
 		assert.Empty(t, info.Links)
 		assert.Empty(t, info.Columns)
 		assert.Empty(t, info.NavColor)

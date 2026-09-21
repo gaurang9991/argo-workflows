@@ -49,7 +49,22 @@ const config = {
             },
             {
                 test: /\.scss$/,
-                use: ['style-loader', 'raw-loader', 'sass-loader']
+                use: [
+                    'style-loader',
+                    'raw-loader',
+                    {
+                        loader: 'sass-loader',
+                        options: {
+                            api: 'modern',
+                            sassOptions: {
+                                loadPaths: [__dirname, __dirname + '/node_modules'],
+                                quietDeps: true,
+                                // argo-ui and Foundation still use @import internally.
+                                silenceDeprecations: ['import']
+                            }
+                        }
+                    }
+                ]
             },
             {
                 test: /\.css$/,
@@ -65,6 +80,12 @@ const config = {
             }
         ]
     },
+    ignoreWarnings: [
+        {
+            module: /node_modules/,
+            message: /[Dd]eprecation [Ww]arnings?/
+        }
+    ],
     plugins: [
         new webpack.DefinePlugin({
             'process.env.DEFAULT_TZ': JSON.stringify('UTC'),

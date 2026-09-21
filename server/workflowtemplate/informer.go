@@ -27,16 +27,21 @@ type Informer struct {
 }
 
 func NewInformer(restConfig *rest.Config, managedNamespace string) (*Informer, error) {
+	return NewInformerForNamespaces(restConfig, managedNamespace, nil)
+}
+
+func NewInformerForNamespaces(restConfig *rest.Config, managedNamespace string, managedNamespaces []string) (*Informer, error) {
 	dynamicInterface, err := dynamic.NewForConfig(restConfig)
 	if err != nil {
 		return nil, err
 	}
-	informer := informer.NewTolerantWorkflowTemplateInformer(
+	wftmplInformer := informer.NewTolerantWorkflowTemplateInformerForNamespaces(
 		dynamicInterface,
 		workflowTemplateResyncPeriod,
-		managedNamespace)
+		managedNamespace,
+		managedNamespaces)
 	return &Informer{
-		informer:         informer,
+		informer:         wftmplInformer,
 		managedNamespace: managedNamespace,
 	}, nil
 }

@@ -261,6 +261,7 @@ nav:
       - security.md
       - Configuration:
           - managed-namespace.md
+          - multi-namespace-mode.md
           - workflow-controller-configmap.md
           - configure-artifact-repository.md
           - configure-archive-logs.md

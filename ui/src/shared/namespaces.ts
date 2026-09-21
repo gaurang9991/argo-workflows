@@ -1,4 +1,5 @@
 const managedNamespaceKey = 'managedNamespace';
+const managedNamespacesKey = 'managedNamespaces';
 const userNamespaceKey = 'userNamespace';
 const currentNamespaceKey = 'current_namespace';
 
@@ -40,6 +41,19 @@ export function getManagedNamespace() {
     return fixLocalStorageString(localStorage.getItem(managedNamespaceKey));
 }
 
+export function setManagedNamespaces(value: string[]) {
+    if (value?.length) {
+        localStorage.setItem(managedNamespacesKey, JSON.stringify(value));
+    } else {
+        localStorage.removeItem(managedNamespacesKey);
+    }
+}
+
+export function getManagedNamespaces(): string[] {
+    const value = localStorage.getItem(managedNamespacesKey);
+    return value ? JSON.parse(value) : [];
+}
+
 export function setCurrentNamespace(value: string) {
     if (value != null) {
         localStorage.setItem(currentNamespaceKey, value);
@@ -50,7 +64,12 @@ export function setCurrentNamespace(value: string) {
 }
 
 export function getCurrentNamespace() {
-    return fixLocalStorageString(localStorage.getItem(currentNamespaceKey)) ?? (getUserNamespace() || getManagedNamespace());
+    const currentNamespace = fixLocalStorageString(localStorage.getItem(currentNamespaceKey));
+    const managedNamespaces = getManagedNamespaces();
+    if (managedNamespaces.length > 0) {
+        return currentNamespace && managedNamespaces.includes(currentNamespace) ? currentNamespace : managedNamespaces[0];
+    }
+    return currentNamespace ?? (getUserNamespace() || getManagedNamespace());
 }
 
 // return a namespace, favoring managed namespace when set

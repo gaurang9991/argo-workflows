@@ -140,6 +140,7 @@ POD_STATUS_CAPTURE_FINALIZER  ?= true
 DEBUG                         ?= # run components under Delve, e.g. DEBUG=controller,server
 NAMESPACED                    := true
 MANAGED_NAMESPACE             ?= $(KUBE_NAMESPACE)
+MANAGED_NAMESPACES            ?= # comma-separated namespaces; overrides MANAGED_NAMESPACE for make start
 SECURE                        ?= false# whether or not to start Argo in TLS mode
 AUTH_MODE                     := hybrid
 ifeq ($(PROFILE),sso)
@@ -220,7 +221,7 @@ endif
 print-variables: ## Print Makefile variables
 	@echo GIT_COMMIT=$(GIT_COMMIT) GIT_BRANCH=$(GIT_BRANCH) GIT_TAG=$(GIT_TAG) GIT_TREE_STATE=$(GIT_TREE_STATE) RELEASE_TAG=$(RELEASE_TAG) DEV_BRANCH=$(DEV_BRANCH) VERSION=$(VERSION)
 	@echo KUBECTX=$(KUBECTX) K3D=$(K3D) DOCKER_PUSH=$(DOCKER_PUSH) TARGET_PLATFORM=$(TARGET_PLATFORM)
-	@echo PROFILE=$(PROFILE) AUTH_MODE=$(AUTH_MODE) SECURE=$(SECURE) STATIC_FILES=$(STATIC_FILES) ALWAYS_OFFLOAD_NODE_STATUS=$(ALWAYS_OFFLOAD_NODE_STATUS) UPPERIO_DB_DEBUG=$(UPPERIO_DB_DEBUG) LOG_LEVEL=$(LOG_LEVEL) NAMESPACED=$(NAMESPACED) BASE_HREF=$(BASE_HREF) GOPATH=$(GOPATH)
+	@echo PROFILE=$(PROFILE) AUTH_MODE=$(AUTH_MODE) SECURE=$(SECURE) STATIC_FILES=$(STATIC_FILES) ALWAYS_OFFLOAD_NODE_STATUS=$(ALWAYS_OFFLOAD_NODE_STATUS) UPPERIO_DB_DEBUG=$(UPPERIO_DB_DEBUG) LOG_LEVEL=$(LOG_LEVEL) NAMESPACED=$(NAMESPACED) MANAGED_NAMESPACE=$(MANAGED_NAMESPACE) MANAGED_NAMESPACES=$(MANAGED_NAMESPACES) BASE_HREF=$(BASE_HREF) GOPATH=$(GOPATH)
 
 ifneq ($(USE_NIX), true)
 proto_vendor: $(TOOL_BUF)
@@ -380,9 +381,12 @@ workflow-controller-image:
 
 # argoexec
 
+ARGOEXEC_GOOS ?= linux
+ARGOEXEC_GOARCH ?= amd64
+
 dist/argoexec: $(ARGOEXEC_PKG_FILES) vendor/modules.txt
 ifeq ($(shell uname -s),Darwin)
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -gcflags '${GCFLAGS}' -v -ldflags '${LDFLAGS} -extldflags -static' -o $@ ./cmd/argoexec
+	CGO_ENABLED=0 GOOS=$(ARGOEXEC_GOOS) GOARCH=$(ARGOEXEC_GOARCH) go build -gcflags '${GCFLAGS}' -v -ldflags '${LDFLAGS} -extldflags -static' -o $@ ./cmd/argoexec
 else
 	CGO_ENABLED=0 go build -v -gcflags '${GCFLAGS}' -ldflags '${LDFLAGS} -extldflags -static' -o $@ ./cmd/argoexec
 endif
@@ -787,12 +791,14 @@ k3d-down: ## Delete the k3d cluster used by Tilt
 	K3D_CLUSTER_NAME=$(K3D_CLUSTER_NAME) ./hack/tilt/k3d-down.sh
 
 .PHONY: start
-start: tilt k3d-up ## Start the dev stack in-cluster via Tilt
+start: tilt k3d-up ## Start via Tilt; use MANAGED_NAMESPACES=team-a,team-b for multi-namespace mode
 	# --host=0.0.0.0 binds the Tilt web UI to all interfaces so it is reachable
 	# via the container IP in a devcontainer (the devcontainer CLI doesn't
 	# forward ports). The argo server/UI/metrics forwards bind 0.0.0.0 too.
 	tilt up --host=0.0.0.0 -- --profile=$(PROFILE) --auth-mode=$(AUTH_MODE) \
 		--secure=$(SECURE) --api=$(API) --initless=$(INITLESS) \
+		--target-platform=$(TARGET_PLATFORM) \
+		--managed-namespaces=$(MANAGED_NAMESPACES) \
 		--pod-status-capture-finalizer=$(POD_STATUS_CAPTURE_FINALIZER) \
 		$(if $(DEBUG),--debug=$(DEBUG))
 

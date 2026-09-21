@@ -91,3 +91,23 @@ func TestServer_K8sUtilsCache(t *testing.T) {
 		assert.NotNil(t, secret)
 	})
 }
+
+func TestResourceCacheForNamespaces(t *testing.T) {
+	kubeClient := kubefake.NewClientset(
+		&v1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: "team-a"}},
+		&v1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "team-b", Namespace: "team-b"}},
+		&v1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "other", Namespace: "other"}},
+	)
+	resourceCache := NewResourceCacheForNamespaces(kubeClient, "argo", []string{"team-a", "team-b"})
+	resourceCache.Run(t.Context().Done())
+
+	teamA, err := resourceCache.ServiceAccountLister.ServiceAccounts("team-a").List(labels.Everything())
+	assert.NoError(t, err)
+	assert.Len(t, teamA, 1)
+	teamB, err := resourceCache.ServiceAccountLister.ServiceAccounts("team-b").List(labels.Everything())
+	assert.NoError(t, err)
+	assert.Len(t, teamB, 1)
+	other, err := resourceCache.ServiceAccountLister.ServiceAccounts("other").List(labels.Everything())
+	assert.NoError(t, err)
+	assert.Empty(t, other)
+}

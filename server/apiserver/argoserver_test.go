@@ -45,6 +45,12 @@ func TestNewArgoServerIgnoresLogoutRedirectOutsideSSO(t *testing.T) {
 	}
 }
 
+func TestGetResourceCacheNamespace(t *testing.T) {
+	assert.Equal(t, "managed", getResourceCacheNamespace("managed", nil, "argo"))
+	assert.Equal(t, corev1.NamespaceAll, getResourceCacheNamespace("", nil, "argo"))
+	assert.Equal(t, "argo", getResourceCacheNamespace("", []string{"team-a", "team-b"}, "argo"))
+}
+
 func TestNewArgoServerRejectsInvalidSSOLogoutRedirect(t *testing.T) {
 	const namespace = "argo"
 	kube := fake.NewClientset(&corev1.ConfigMap{

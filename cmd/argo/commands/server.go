@@ -31,6 +31,7 @@ import (
 	cmdutil "github.com/argoproj/argo-workflows/v4/util/cmd"
 	"github.com/argoproj/argo-workflows/v4/util/help"
 	"github.com/argoproj/argo-workflows/v4/util/logging"
+	"github.com/argoproj/argo-workflows/v4/util/managednamespace"
 	pprofutil "github.com/argoproj/argo-workflows/v4/util/pprof"
 	tlsutils "github.com/argoproj/argo-workflows/v4/util/tls"
 	"github.com/argoproj/argo-workflows/v4/workflow/common"
@@ -47,6 +48,7 @@ func NewServerCommand() *cobra.Command {
 		hsts                     bool
 		namespaced               bool   // --namespaced
 		managedNamespace         string // --managed-namespace
+		managedNamespaces        []string
 		enableOpenBrowser        bool
 		eventOperationQueueSize  int
 		eventWorkerCount         int
@@ -94,12 +96,12 @@ See %s`, help.ArgoServer()),
 			ctx, cancel := context.WithCancel(ctx)
 			defer cancel()
 
-			if !namespaced && managedNamespace != "" {
-				logger.Warn(ctx, "ignoring --managed-namespace because --namespaced is false")
-				managedNamespace = ""
+			if !namespaced && (managedNamespace != "" || len(managedNamespaces) > 0) {
+				logger.Warn(ctx, "ignoring managed namespace options because --namespaced is false")
 			}
-			if namespaced && managedNamespace == "" {
-				managedNamespace = namespace
+			managedNamespace, managedNamespaces, err = managednamespace.Resolve(namespaced, namespace, managedNamespace, managedNamespaces)
+			if err != nil {
+				return err
 			}
 
 			ssoNamespace := namespace
@@ -108,12 +110,13 @@ See %s`, help.ArgoServer()),
 			}
 
 			logger.WithFields(logging.Fields{
-				"authModes":        authModes,
-				"namespace":        namespace,
-				"managedNamespace": managedNamespace,
-				"ssoNamespace":     ssoNamespace,
-				"baseHRef":         baseHRef,
-				"secure":           secure,
+				"authModes":         authModes,
+				"namespace":         namespace,
+				"managedNamespace":  managedNamespace,
+				"managedNamespaces": managedNamespaces,
+				"ssoNamespace":      ssoNamespace,
+				"baseHRef":          baseHRef,
+				"secure":            secure,
 			}).Info(ctx, "Starting Argo Server")
 
 			var tlsConfig *tls.Config
@@ -162,6 +165,7 @@ See %s`, help.ArgoServer()),
 				RestConfig:               config,
 				AuthModes:                modes,
 				ManagedNamespace:         managedNamespace,
+				ManagedNamespaces:        managedNamespaces,
 				SSONamespace:             ssoNamespace,
 				ConfigName:               configMap,
 				EventOperationQueueSize:  eventOperationQueueSize,
@@ -202,6 +206,7 @@ See %s`, help.ArgoServer()),
 	command.Flags().StringVar(&configMap, "configmap", common.ConfigMapName, "Name of K8s configmap to retrieve workflow controller configuration")
 	command.Flags().BoolVar(&namespaced, "namespaced", false, "run as namespaced mode")
 	command.Flags().StringVar(&managedNamespace, "managed-namespace", "", "namespace that watches, default to the installation namespace")
+	command.Flags().StringSliceVar(&managedNamespaces, "managed-namespaces", nil, "namespaces that workflow-controller and server watch")
 	command.Flags().BoolVarP(&enableOpenBrowser, "browser", "b", false, "enable automatic launching of the browser [local mode]")
 	command.Flags().IntVar(&eventOperationQueueSize, "event-operation-queue-size", 16, "how many events operations that can be queued at once")
 	command.Flags().IntVar(&eventWorkerCount, "event-worker-count", 4, "how many event workers to run")

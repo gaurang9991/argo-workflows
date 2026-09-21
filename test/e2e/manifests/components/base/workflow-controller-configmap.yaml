@@ -27,6 +27,9 @@ data:
   artifactDrivers: |
     - name: test
       image: ghcr.io/argoproj-labs/artifact-driver-s3:v0.3.1
+  images: |
+    ghcr.io/argoproj-labs/artifact-driver-s3:v0.3.1:
+      entrypoint: [/artifact-server]
   failedPodRestart: |
     enabled: true
     maxRestarts: 3

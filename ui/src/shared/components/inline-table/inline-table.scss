@@ -1,4 +1,4 @@
-@import 'node_modules/argo-ui/src/styles/config';
+@use 'argo-ui/src/styles/config' as *;
 
 .it {
   padding: 1em 0;

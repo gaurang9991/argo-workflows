@@ -5,8 +5,11 @@ ARG GIT_TREE_STATE=unknown
 
 FROM golang:1.26.5-alpine3.23 AS builder
 
+ENV GOSUMDB=off \
+  GOINSECURE=*
+
 # libc-dev to build openapi-gen
-RUN apk update && apk add --no-cache \
+RUN apk --no-check-certificate update && apk --no-check-certificate add --no-cache \
     git \
     make \
     ca-certificates \
@@ -38,7 +41,7 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 
 FROM node:20-alpine AS argo-ui
 
-RUN apk update && apk add --no-cache git
+RUN apk --no-check-certificate update && apk --no-check-certificate add --no-cache git
 
 COPY ui/package.json ui/yarn.lock ui/
 
@@ -160,33 +163,41 @@ CMD [ "apply", "--server-side", "--force-conflicts", "-v=6", "-f", "/crds/full/"
 # rebuilds these (trivial COPY) and recreates the pod.
 
 FROM alpine:3.24 AS workflow-controller-dev
-RUN apk add --no-cache ca-certificates
+RUN apk --no-check-certificate add --no-cache ca-certificates
 COPY hack/ssh_known_hosts /etc/ssh/
 COPY hack/nsswitch.conf /etc/
 COPY dist/workflow-controller /bin/workflow-controller
-# Delve, for `tilt up -- --debug=controller` (the Tiltfile wraps the entrypoint).
-COPY --from=dlv-build /go/bin/dlv /bin/dlv
 # Match the prod image's non-root user so runAsNonRoot is satisfied.
 USER 8737
 ENTRYPOINT [ "workflow-controller" ]
 
 ####################################################################################################
 
+FROM workflow-controller-dev AS workflow-controller-debug
+# The Tiltfile wraps the entrypoint when debugging is enabled.
+COPY --from=dlv-build /go/bin/dlv /bin/dlv
+
+####################################################################################################
+
 FROM alpine:3.24 AS argocli-dev
-RUN apk add --no-cache ca-certificates
+RUN apk --no-check-certificate add --no-cache ca-certificates
 WORKDIR /home/argo
 COPY hack/ssh_known_hosts /etc/ssh/
 COPY hack/nsswitch.conf /etc/
 COPY dist/argo /bin/argo
-# Delve, for `tilt up -- --debug=server` (the Tiltfile wraps the entrypoint).
-COPY --from=dlv-build /go/bin/dlv /bin/dlv
 USER 8737
 ENTRYPOINT [ "argo" ]
 
 ####################################################################################################
 
+FROM argocli-dev AS argocli-debug
+# The Tiltfile wraps the entrypoint when debugging is enabled.
+COPY --from=dlv-build /go/bin/dlv /bin/dlv
+
+####################################################################################################
+
 FROM alpine:3.24 AS argoexec-dev
-RUN apk add --no-cache ca-certificates mailcap
+RUN apk --no-check-certificate add --no-cache ca-certificates mailcap
 COPY hack/ssh_known_hosts /etc/ssh/
 COPY hack/nsswitch.conf /etc/
 COPY dist/argoexec /bin/argoexec

@@ -94,6 +94,7 @@ type argoServer struct {
 	hsts                     bool
 	namespace                string
 	managedNamespace         string
+	managedNamespaces        []string
 	clients                  *types.Clients
 	gatekeeper               auth.Gatekeeper
 	oAuth2Service            sso.Interface
@@ -122,6 +123,7 @@ type ArgoServerOpts struct {
 	// config map name
 	ConfigName               string
 	ManagedNamespace         string
+	ManagedNamespaces        []string
 	SSONamespace             string
 	HSTS                     bool
 	EventOperationQueueSize  int
@@ -133,9 +135,12 @@ type ArgoServerOpts struct {
 	AllowedLinkProtocol      []string
 }
 
-func getResourceCacheNamespace(managedNamespace string) string {
+func getResourceCacheNamespace(managedNamespace string, managedNamespaces []string, installationNamespace string) string {
 	if managedNamespace != "" {
 		return managedNamespace
+	}
+	if len(managedNamespaces) > 0 {
+		return installationNamespace
 	}
 	return v1.NamespaceAll
 }
@@ -159,7 +164,7 @@ func NewArgoServer(ctx context.Context, opts ArgoServerOpts) (Server, error) {
 		}
 		if ssoIf.IsRBACEnabled() {
 			// resourceCache is only used for SSO RBAC
-			resourceCache = cache.NewResourceCache(opts.Clients.Kubernetes, getResourceCacheNamespace(opts.ManagedNamespace))
+			resourceCache = cache.NewResourceCacheForNamespaces(opts.Clients.Kubernetes, getResourceCacheNamespace(opts.ManagedNamespace, opts.ManagedNamespaces, opts.Namespace), opts.ManagedNamespaces)
 			resourceCache.Run(ctx.Done())
 		}
 		log.Info(ctx, "SSO enabled")
@@ -189,6 +194,7 @@ func NewArgoServer(ctx context.Context, opts ArgoServerOpts) (Server, error) {
 		hsts:                     opts.HSTS,
 		namespace:                opts.Namespace,
 		managedNamespace:         opts.ManagedNamespace,
+		managedNamespaces:        opts.ManagedNamespaces,
 		clients:                  opts.Clients,
 		gatekeeper:               gatekeeper,
 		oAuth2Service:            ssoIf,
@@ -267,8 +273,8 @@ func (as *argoServer) Run(ctx context.Context, port int, browserOpenFunc func(st
 		// disable the archiving - and still read old records
 		wfArchive = persist.NewWorkflowArchive(sessionProxy, persistence.GetClusterName(), as.managedNamespace, instanceIDService)
 	}
-	resourceCacheNamespace := getResourceCacheNamespace(as.managedNamespace)
-	wftmplStore, err := workflowtemplate.NewInformer(as.restConfig, resourceCacheNamespace)
+	resourceCacheNamespace := getResourceCacheNamespace(as.managedNamespace, as.managedNamespaces, as.namespace)
+	wftmplStore, err := workflowtemplate.NewInformerForNamespaces(as.restConfig, resourceCacheNamespace, as.managedNamespaces)
 	if err != nil {
 		log.WithFatal().Error(ctx, err.Error())
 	}
@@ -293,7 +299,7 @@ func (as *argoServer) Run(ctx context.Context, port int, browserOpenFunc func(st
 	if err != nil {
 		log.WithFatal().Error(ctx, err.Error())
 	}
-	workflowServer := workflow.NewServer(ctx, instanceIDService, offloadRepo, wfArchive, as.clients.Workflow, wfStore, wfStore, wftmplStore, cwftmplInformer, config.WorkflowDefaults, &resourceCacheNamespace, artifactRepositories)
+	workflowServer := workflow.NewServerForNamespaces(ctx, instanceIDService, offloadRepo, wfArchive, as.clients.Workflow, wfStore, wfStore, wftmplStore, cwftmplInformer, config.WorkflowDefaults, &resourceCacheNamespace, as.managedNamespaces, artifactRepositories)
 	grpcServer := as.newGRPCServer(ctx, instanceIDService, workflowServer, wftmplStore, cwftmplInformer, wfArchiveServer, syncServer, eventServer, config.Links, config.Columns, config.NavColor, config.WorkflowDefaults)
 	httpServer := as.newHTTPServer(ctx, port, artifactServer)
 
@@ -388,7 +394,7 @@ func (as *argoServer) newGRPCServer(ctx context.Context, instanceIDService insta
 	}
 
 	grpcServer := grpc.NewServer(sOpts...)
-	infopkg.RegisterInfoServiceServer(grpcServer, info.NewInfoServer(as.managedNamespace, links, columns, navColor))
+	infopkg.RegisterInfoServiceServer(grpcServer, info.NewInfoServer(as.managedNamespace, as.managedNamespaces, links, columns, navColor))
 	eventpkg.RegisterEventServiceServer(grpcServer, eventServer)
 	eventsourcepkg.RegisterEventSourceServiceServer(grpcServer, eventsource.NewEventSourceServer())
 	sensorpkg.RegisterSensorServiceServer(grpcServer, sensor.NewSensorServer())

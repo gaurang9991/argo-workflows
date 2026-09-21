@@ -12,10 +12,11 @@ import (
 )
 
 type infoServer struct {
-	managedNamespace string
-	links            []*wfv1.Link
-	columns          []*wfv1.Column
-	navColor         string
+	managedNamespace  string
+	managedNamespaces []string
+	links             []*wfv1.Link
+	columns           []*wfv1.Column
+	navColor          string
 }
 
 func (i *infoServer) GetUserInfo(ctx context.Context, _ *infopkg.GetUserInfoRequest) (*infopkg.GetUserInfoResponse, error) {
@@ -42,11 +43,12 @@ func (i *infoServer) GetInfo(context.Context, *infopkg.GetInfoRequest) (*infopkg
 		"newVersion":    os.Getenv("NEW_VERSION_MODAL") != "false",
 	}
 	return &infopkg.InfoResponse{
-		ManagedNamespace: i.managedNamespace,
-		Links:            i.links,
-		Columns:          i.columns,
-		Modals:           modals,
-		NavColor:         i.navColor,
+		ManagedNamespace:  i.managedNamespace,
+		ManagedNamespaces: i.managedNamespaces,
+		Links:             i.links,
+		Columns:           i.columns,
+		Modals:            modals,
+		NavColor:          i.navColor,
 	}, nil
 }
 
@@ -73,6 +75,6 @@ func (i *infoServer) CollectEvent(ctx context.Context, req *infopkg.CollectEvent
 	return &infopkg.CollectEventResponse{}, nil
 }
 
-func NewInfoServer(managedNamespace string, links []*wfv1.Link, columns []*wfv1.Column, navColor string) infopkg.InfoServiceServer {
-	return &infoServer{managedNamespace, links, columns, navColor}
+func NewInfoServer(managedNamespace string, managedNamespaces []string, links []*wfv1.Link, columns []*wfv1.Column, navColor string) infopkg.InfoServiceServer {
+	return &infoServer{managedNamespace, managedNamespaces, links, columns, navColor}
 }
