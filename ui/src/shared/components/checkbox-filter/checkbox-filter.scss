@@ -1,4 +1,4 @@
-@import 'node_modules/argo-ui/src/styles/config';
+@use 'argo-ui/src/styles/config' as *;
 
 .checkbox-filter {
     max-height: calc(1.55em * 14);

@@ -1,6 +1,6 @@
-@import 'node_modules/argo-ui/src/styles/config';
-@import 'node_modules/@fortawesome/fontawesome-free/scss/variables';
-@import 'node_modules/@fortawesome/fontawesome-free/scss/mixins';
+@use 'argo-ui/src/styles/config' as *;
+@use '@fortawesome/fontawesome-free/scss/variables' as *;
+@use '@fortawesome/fontawesome-free/scss/mixins' as *;
 
 .workflow-dag-render-options-panel {
   position: fixed;

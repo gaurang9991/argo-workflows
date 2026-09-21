@@ -14,6 +14,8 @@
 #   --auth-mode=<mode>                  argo-server auth mode (hybrid; sso for PROFILE=sso)
 #   --secure=true                       argo-server serves TLS
 #   --api=false                         don't build or run the argo-server
+#   --target-platform=linux/arm64       OS/architecture for dev binaries and images
+#   --managed-namespaces=team-a,team-b  manage only these namespaces and create them locally
 #   --initless=true                     deploy the <profile>-initless manifests, enabling the
 #                                       init-less pod layout (requires K8s image volumes —
 #                                       Beta in 1.33 behind a feature gate, GA in 1.36)
@@ -32,6 +34,8 @@ config.define_string('mode')
 config.define_string('auth-mode')
 config.define_string('secure')
 config.define_string('api')
+config.define_string('target-platform')
+config.define_string('managed-namespaces')
 config.define_string('pod-status-capture-finalizer')
 # --debug=controller,server runs the named components under headless Delve. See
 # the "Debugging under Tilt" section of docs/running-locally.md.
@@ -44,6 +48,17 @@ is_ci = mode == 'ci'
 auth_mode = cfg.get('auth-mode', 'hybrid')
 secure = cfg.get('secure', 'false')
 api = cfg.get('api', 'true') != 'false'
+target_platform = cfg.get('target-platform', 'linux/amd64')
+platform_parts = target_platform.split('/')
+if len(platform_parts) != 2 or platform_parts[0] != 'linux':
+    fail('--target-platform must use the form linux/<architecture>, got: %s' % target_platform)
+target_os = platform_parts[0]
+target_arch = platform_parts[1]
+managed_namespaces = []
+for value in cfg.get('managed-namespaces', '').split(','):
+    namespace = value.strip()
+    if namespace and namespace not in managed_namespaces:
+        managed_namespaces.append(namespace)
 finalizer = cfg.get('pod-status-capture-finalizer', 'true')
 # Debugging is a dev-only convenience; force it off under CI so `tilt ci` builds
 # the real production images and never wraps them in dlv. Tilt's string_list
@@ -129,6 +144,9 @@ for o in objs:
     if not o or o.get('kind') != 'Deployment':
         continue
     container = o['spec']['template']['spec']['containers'][0]
+    if managed_namespaces and o['metadata']['name'] in ['workflow-controller', 'argo-server']:
+        container['env'] = [item for item in container.get('env', []) if item.get('name') != 'ARGO_MANAGED_NAMESPACE']
+        container['args'] = container.get('args', []) + ['--managed-namespaces=' + ','.join(managed_namespaces)]
     if o['metadata']['name'] == 'workflow-controller':
         env = container.get('env', [])
         env.append({'name': 'ARGO_POD_STATUS_CAPTURE_FINALIZER', 'value': finalizer})
@@ -167,6 +185,13 @@ for o in objs:
 rest = encode_yaml_stream(objs)
 
 k8s_yaml('test/e2e/manifests/argo-ns.yaml')
+if managed_namespaces:
+    namespace_objects = []
+    for namespace in managed_namespaces:
+        if namespace != 'argo':
+            namespace_objects.append({'apiVersion': 'v1', 'kind': 'Namespace', 'metadata': {'name': namespace}})
+    if namespace_objects:
+        k8s_yaml(encode_yaml_stream(namespace_objects))
 local_resource('argo-crds',
     cmd='kubectl apply --server-side --force-conflicts -f .tilt/crds.yaml',
     deps=['.tilt/crds.yaml'],
@@ -191,7 +216,7 @@ def k3d_import(images):
 
 def k3d_build(ref, target, deps, prebuild=None, canonical=None):
     steps = ([prebuild] if prebuild else []) + [
-        'docker build -f Dockerfile %s --target %s -t $EXPECTED_REF .' % (BUILD_ARGS, target),
+        'docker build --platform %s -f Dockerfile %s --target %s -t $EXPECTED_REF .' % (target_platform, BUILD_ARGS, target),
     ]
     images = '$EXPECTED_REF'
     if canonical:
@@ -227,14 +252,16 @@ else:
     # — Tilt still flags the change; you click to rebuild when you're ready.
     ctrl_gcflags = " GCFLAGS='all=-N -l'" if debug_controller else ''
     ctrl_trigger = TRIGGER_MODE_MANUAL if debug_controller else TRIGGER_MODE_AUTO
-    local_resource('controller-compile', cmd='make dist/workflow-controller' + ctrl_gcflags,
+    dev_go_env = 'CGO_ENABLED=0 GOOS=%s GOARCH=%s' % (target_os, target_arch)
+    local_resource('controller-compile', cmd='rm -f dist/workflow-controller && %s make dist/workflow-controller%s' % (dev_go_env, ctrl_gcflags),
         deps=ctrl_src, trigger_mode=ctrl_trigger, labels=['compile'])
-    k3d_build(IMAGE_NS + '/workflow-controller', 'workflow-controller-dev',
+    controller_target = 'workflow-controller-debug' if debug_controller else 'workflow-controller-dev'
+    k3d_build(IMAGE_NS + '/workflow-controller', controller_target,
         ['dist/workflow-controller', 'hack/ssh_known_hosts', 'hack/nsswitch.conf', 'Dockerfile'])
-    cli_target = 'argocli-dev'
+    cli_target = 'argocli-debug' if debug_server else 'argocli-dev'
     cli_deps = ['dist/argo', 'hack/ssh_known_hosts', 'hack/nsswitch.conf', 'Dockerfile']
-    cli_prebuild = 'make dist/argo STATIC_FILES=false'
-    exec_prebuild = 'make dist/argoexec'
+    cli_prebuild = 'rm -f dist/argo && %s make dist/argo STATIC_FILES=false' % dev_go_env
+    exec_prebuild = 'rm -f dist/argoexec && make dist/argoexec ARGOEXEC_GOOS=%s ARGOEXEC_GOARCH=%s' % (target_os, target_arch)
     exec_target = 'argoexec-dev'
 
 # The argocli image is needed even without the server: e2e test workflows
@@ -244,18 +271,18 @@ if api:
     if not is_ci:
         cli_gcflags = " GCFLAGS='all=-N -l'" if debug_server else ''
         cli_trigger = TRIGGER_MODE_MANUAL if debug_server else TRIGGER_MODE_AUTO
-        local_resource('cli-compile', cmd='make dist/argo STATIC_FILES=false' + cli_gcflags,
+        local_resource('cli-compile', cmd='rm -f dist/argo && %s make dist/argo STATIC_FILES=false%s' % (dev_go_env, cli_gcflags),
             deps=cli_src, trigger_mode=cli_trigger, labels=['compile'])
     k3d_build(IMAGE_NS + '/argocli', cli_target, cli_deps, canonical=CLI_CANONICAL)
 else:
     cli_cmd = ' && '.join(([cli_prebuild] if cli_prebuild else []) + [
-        'docker build -f Dockerfile %s --target %s -t %s .' % (BUILD_ARGS, cli_target, CLI_CANONICAL),
+        'docker build --platform %s -f Dockerfile %s --target %s -t %s .' % (target_platform, BUILD_ARGS, cli_target, CLI_CANONICAL),
         k3d_import(CLI_CANONICAL),
     ])
     local_resource('argocli-image', cmd=cli_cmd, deps=cli_deps, labels=['images'])
 
 exec_cmd = ' && '.join(([exec_prebuild] if exec_prebuild else []) + [
-    'docker build -f Dockerfile %s --target %s -t %s/argoexec:latest .' % (BUILD_ARGS, exec_target, IMAGE_NS),
+    'docker build --platform %s -f Dockerfile %s --target %s -t %s/argoexec:latest .' % (target_platform, BUILD_ARGS, exec_target, IMAGE_NS),
     k3d_import('%s/argoexec:latest' % IMAGE_NS),
 ])
 local_resource('argoexec-image', cmd=exec_cmd, deps=exec_src, labels=['images'])
@@ -299,7 +326,7 @@ if not is_ci and api:
         labels=['ui'])
     local_resource('ui',
         serve_cmd='yarn --cwd ui start',
-        deps=['ui/src'],
+        deps=['ui/src', 'ui/webpack.config.js'],
         resource_deps=['ui-deps', 'argo-server'],
         links=['http://localhost:8080'],
         labels=['ui'])

@@ -88,7 +88,7 @@ func (woc *wfOperationCtx) removeCompletedTaskSetStatus(ctx context.Context, nod
 }
 
 func (woc *wfOperationCtx) getWorkflowTaskSet() (*wfv1.WorkflowTaskSet, error) {
-	taskSet, exists, err := woc.controller.wfTaskSetInformer.Informer().GetIndexer().GetByKey(woc.wf.Namespace + "/" + woc.wf.Name)
+	taskSet, exists, err := woc.controller.wfTaskSetInformer.GetIndexer().GetByKey(woc.wf.Namespace + "/" + woc.wf.Name)
 	if err != nil {
 		return nil, err
 	}

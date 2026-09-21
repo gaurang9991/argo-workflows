@@ -380,9 +380,12 @@ workflow-controller-image:
 
 # argoexec
 
+ARGOEXEC_GOOS ?= linux
+ARGOEXEC_GOARCH ?= amd64
+
 dist/argoexec: $(ARGOEXEC_PKG_FILES) vendor/modules.txt
 ifeq ($(shell uname -s),Darwin)
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -gcflags '${GCFLAGS}' -v -ldflags '${LDFLAGS} -extldflags -static' -o $@ ./cmd/argoexec
+	CGO_ENABLED=0 GOOS=$(ARGOEXEC_GOOS) GOARCH=$(ARGOEXEC_GOARCH) go build -gcflags '${GCFLAGS}' -v -ldflags '${LDFLAGS} -extldflags -static' -o $@ ./cmd/argoexec
 else
 	CGO_ENABLED=0 go build -v -gcflags '${GCFLAGS}' -ldflags '${LDFLAGS} -extldflags -static' -o $@ ./cmd/argoexec
 endif
@@ -793,6 +796,7 @@ start: tilt k3d-up ## Start the dev stack in-cluster via Tilt
 	# forward ports). The argo server/UI/metrics forwards bind 0.0.0.0 too.
 	tilt up --host=0.0.0.0 -- --profile=$(PROFILE) --auth-mode=$(AUTH_MODE) \
 		--secure=$(SECURE) --api=$(API) --initless=$(INITLESS) \
+		--target-platform=$(TARGET_PLATFORM) \
 		--pod-status-capture-finalizer=$(POD_STATUS_CAPTURE_FINALIZER) \
 		$(if $(DEBUG),--debug=$(DEBUG))
 

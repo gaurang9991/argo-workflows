@@ -76,6 +76,7 @@ export function AppRouter({popupManager, history, notificationsManager}: {popupM
             .getInfo()
             .then(info => {
                 nsUtils.setManagedNamespace(info.managedNamespace);
+                nsUtils.setManagedNamespaces(info.managedNamespaces);
                 setNamespace(nsUtils.getCurrentNamespace());
                 setModals(info.modals);
                 setNavBarBackgroundColor(info.navColor);

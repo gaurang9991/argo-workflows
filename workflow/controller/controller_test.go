@@ -350,8 +350,8 @@ func newController(ctx context.Context, options ...any) (context.CancelFunc, *Wo
 	// always compare to WorkflowController.Run to see what this block of code should be doing
 	{
 		wfc.wfInformer = util.NewWorkflowInformer(ctx, dynamicClient, "", 0, wfc.tweakListRequestListOptions, wfc.tweakWatchRequestListOptions, newIndexers(wfc.indexWorkflowSemaphoreKeys))
-		wfc.wfTaskSetInformer = informerFactory.Argoproj().V1alpha1().WorkflowTaskSets()
-		wfc.artGCTaskInformer = informerFactory.Argoproj().V1alpha1().WorkflowArtifactGCTasks()
+		wfc.wfTaskSetInformer = informerFactory.Argoproj().V1alpha1().WorkflowTaskSets().Informer()
+		wfc.artGCTaskInformer = informerFactory.Argoproj().V1alpha1().WorkflowArtifactGCTasks().Informer()
 		wfc.taskResultInformer = wfc.newWorkflowTaskResultInformer(ctx)
 		wfc.wftmplInformer = informerFactory.Argoproj().V1alpha1().WorkflowTemplates()
 		_ = wfc.addWorkflowInformerHandlers(ctx)
@@ -364,8 +364,8 @@ func newController(ctx context.Context, options ...any) (context.CancelFunc, *Wo
 		go wfc.wfInformer.Run(ctx.Done())
 		go wfc.wftmplInformer.Informer().Run(ctx.Done())
 		go wfc.PodController.Run(ctx, 0) // Zero workers so we can manually process next item
-		go wfc.wfTaskSetInformer.Informer().Run(ctx.Done())
-		go wfc.artGCTaskInformer.Informer().Run(ctx.Done())
+		go wfc.wfTaskSetInformer.Run(ctx.Done())
+		go wfc.artGCTaskInformer.Run(ctx.Done())
 		go wfc.taskResultInformer.Run(ctx.Done())
 		wfc.cwftmplInformer = informerFactory.Argoproj().V1alpha1().ClusterWorkflowTemplates()
 		go wfc.cwftmplInformer.Informer().Run(ctx.Done())
@@ -376,8 +376,8 @@ func newController(ctx context.Context, options ...any) (context.CancelFunc, *Wo
 			wfc.wftmplInformer.Informer(),
 			wfc.PodController.TestingPodInformer(),
 			wfc.cwftmplInformer.Informer(),
-			wfc.wfTaskSetInformer.Informer(),
-			wfc.artGCTaskInformer.Informer(),
+			wfc.wfTaskSetInformer,
+			wfc.artGCTaskInformer,
 			wfc.taskResultInformer,
 			wfc.typedConfigMapInformer,
 		} {

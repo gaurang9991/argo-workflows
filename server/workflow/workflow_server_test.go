@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/client-go/kubernetes/fake"
 	ktesting "k8s.io/client-go/testing"
+	"k8s.io/client-go/tools/cache"
 
 	"github.com/argoproj/argo-workflows/v4/persist/sqldb"
 	"github.com/argoproj/argo-workflows/v4/persist/sqldb/mocks"
@@ -67,6 +68,30 @@ const unlabelled = `{
   }
 }
 `
+
+func TestNewServerForNamespacesCreatesOneReflectorPerNamespace(t *testing.T) {
+	wfClientset := v1alpha.NewSimpleClientset()
+	wfStore := cache.NewStore(cache.MetaNamespaceKeyFunc)
+	resourceCacheNamespace := "argo"
+
+	server := NewServerForNamespaces(
+		t.Context(),
+		instanceid.NewService(""),
+		sqldb.ExplosiveOffloadNodeStatusRepo,
+		sqldb.NullWorkflowArchive,
+		wfClientset,
+		nil,
+		wfStore,
+		nil,
+		nil,
+		nil,
+		&resourceCacheNamespace,
+		[]string{"team-a", "team-b"},
+		nil,
+	)
+
+	assert.Len(t, server.(*workflowServer).wfReflectors, 2)
+}
 
 const wf1 = `
 {
