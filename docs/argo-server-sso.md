@@ -147,6 +147,73 @@ As of Kubernetes v1.24, secrets for a service account token are no longer automa
 Therefore, service account secrets for SSO RBAC must be created manually.
 See [Service Account Secrets](service-account-secrets.md) for detailed instructions.
 
+## SSO RBAC Fine-Grained Policy (Casbin)
+
+> Experimental
+
+As an alternative to the annotation-based rules above, SSO RBAC can evaluate a
+[Casbin](https://casbin.org)-backed policy that grants distinct permissions per action
+(`get`, `list`, `resume`, `retry`, `suspend`, `terminate`, `stop`, `resubmit`, ...), not just
+per Kubernetes verb, and per namespace/name object pattern.
+
+To enable it, set `sso.rbac.policyConfigMap` to the name of a dedicated ConfigMap (in the same
+namespace as the Argo Server) holding the policy. This ConfigMap is watched independently and
+reloaded without restarting the Argo Server.
+
+```yaml
+sso:
+  # ...
+  rbac:
+    enabled: true
+    policyConfigMap: argo-rbac-cm
+```
+
+The dedicated ConfigMap has two keys:
+
+- `policy.csv`: Casbin `g` (subject/group -> role) and `p` (role, resource, action, object,
+  allow|deny) lines. `resource` and `action` match `*` or an exact string only (write one line
+  per action, e.g. separate `resume` and `retry` lines). `object` is `namespace/name` and
+  supports a trailing `*` wildcard, e.g. `team-a/*`.
+- `linkedServiceAccounts.yaml`: a YAML map from every role referenced in `policy.csv` to the
+  `namespace/name` of the ServiceAccount used to call the Kubernetes API when that role
+  authorizes a request (the same kind of ServiceAccount used by the annotation-based rules
+  above, with a Role/RoleBinding granting it the required Kubernetes permissions).
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argo-rbac-cm
+  namespace: argo
+data:
+  policy.csv: |
+    g, team-a-admins, role:team-a-operator
+    g, everyone, role:read-only
+    p, role:team-a-operator, workflows, get, team-a/*, allow
+    p, role:team-a-operator, workflows, list, team-a/*, allow
+    p, role:team-a-operator, workflows, resume, team-a/*, allow
+    p, role:team-a-operator, workflows, retry, team-a/*, allow
+    p, role:team-a-operator, workflows, terminate, team-a/*, deny
+    p, role:read-only, *, get, */*, allow
+    p, role:read-only, *, list, */*, allow
+  linkedServiceAccounts.yaml: |
+    role:team-a-operator: team-a/team-a-operator-sa
+    role:read-only: argo/read-only-sa
+```
+
+A request's subject is checked against the caller's OIDC `sub`, `email`, and each of their
+`groups` in turn; the first one a role's policy allows wins. An explicit `deny` always wins
+over an `allow` for the same subject. Loading fails, and the previously loaded policy (if any)
+stays in effect, if any role referenced in `policy.csv` has no entry in
+`linkedServiceAccounts.yaml`.
+
+Only a subset of gRPC methods have a registered resource/action mapping in this release
+(mainly `WorkflowService`, `CronWorkflowService`, `WorkflowTemplateService`,
+`ClusterWorkflowTemplateService`, `ArchivedWorkflowService`, and `SyncService`). Methods
+without a mapping continue to use the legacy `workflows.argoproj.io/rbac-rule` annotation
+matching described above, so it is safe to enable this alongside existing annotation-based
+rules during a gradual migration.
+
 ## SSO RBAC Namespace Delegation
 
 > v3.3 and after

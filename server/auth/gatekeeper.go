@@ -29,6 +29,7 @@ import (
 
 	workflow "github.com/argoproj/argo-workflows/v4/pkg/client/clientset/versioned"
 	authcookie "github.com/argoproj/argo-workflows/v4/server/auth/cookie"
+	"github.com/argoproj/argo-workflows/v4/server/auth/rbac"
 	"github.com/argoproj/argo-workflows/v4/server/auth/serviceaccount"
 	"github.com/argoproj/argo-workflows/v4/server/auth/sso"
 	authTypes "github.com/argoproj/argo-workflows/v4/server/auth/types"
@@ -74,13 +75,17 @@ type gatekeeper struct {
 	cache        *cache.ResourceCache
 	// successful client-mode token reviews, keyed by a digest of the authorization header
 	tokenReviewCache cache.Interface
+	// rbacEnforcer, if non-nil and enabled, is consulted for methods with a registered
+	// rbac.ActionFor mapping before falling back to the legacy ServiceAccount-annotation
+	// matching in getServiceAccount. Only used in SSO mode.
+	rbacEnforcer *rbac.Enforcer
 }
 
 // tokenReviewCacheSize bounds the number of distinct client-mode tokens whose successful
 // SelfSubjectReview is remembered.
 const tokenReviewCacheSize = 1000
 
-func NewGatekeeper(modes Modes, clients *servertypes.Clients, restConfig *rest.Config, ssoIf sso.Interface, clientForAuthorization ClientForAuthorization, namespace string, ssoNamespace string, namespaced bool, resourceCache *cache.ResourceCache, tokenReviewCacheTTL time.Duration) (Gatekeeper, error) {
+func NewGatekeeper(modes Modes, clients *servertypes.Clients, restConfig *rest.Config, ssoIf sso.Interface, clientForAuthorization ClientForAuthorization, namespace string, ssoNamespace string, namespaced bool, resourceCache *cache.ResourceCache, tokenReviewCacheTTL time.Duration, rbacEnforcer *rbac.Enforcer) (Gatekeeper, error) {
 	if len(modes) == 0 {
 		return nil, fmt.Errorf("must specify at least one auth mode")
 	}
@@ -95,6 +100,7 @@ func NewGatekeeper(modes Modes, clients *servertypes.Clients, restConfig *rest.C
 		namespaced,
 		resourceCache,
 		cache.NewLRUTtlCache(tokenReviewCacheTTL, tokenReviewCacheSize),
+		rbacEnforcer,
 	}, nil
 }
 
@@ -317,6 +323,9 @@ func (s *gatekeeper) getClientsForServiceAccount(ctx context.Context, claims *au
 
 func (s *gatekeeper) rbacAuthorization(ctx context.Context, claims *authTypes.Claims, req any) (*servertypes.Clients, error) {
 	logger := logging.RequireLoggerFromContext(ctx)
+	if clients, applicable, err := s.fineGrainedRBACAuthorization(ctx, claims, req); applicable {
+		return clients, err
+	}
 	ssoDelegationAllowed, ssoDelegated := false, false
 	loginAccount, err := s.getServiceAccount(claims, s.ssoNamespace)
 	if err != nil && !strings.Contains(err.Error(), "no service account rule matches") {
@@ -349,6 +358,73 @@ func (s *gatekeeper) rbacAuthorization(ctx context.Context, claims *authTypes.Cl
 	}
 	logger.WithFields(fields).Info(ctx, "selected SSO RBAC service account for user")
 	return s.getClientsForServiceAccount(ctx, claims, delegatedAccount)
+}
+
+// fineGrainedRBACAuthorization applies the Casbin-based policy layer when it is enabled and
+// the incoming request's gRPC method has a registered rbac.ActionFor mapping. applicable is
+// false when the fine-grained layer does not apply to this request (no dedicated policy
+// loaded, not a gRPC call, or the method is not yet mapped); callers should then fall back to
+// the legacy ServiceAccount-annotation matching in getServiceAccount. When applicable is true,
+// err (which may be nil) is the final result and no fallback should be attempted.
+func (s *gatekeeper) fineGrainedRBACAuthorization(ctx context.Context, claims *authTypes.Claims, req any) (clients *servertypes.Clients, applicable bool, err error) {
+	if s.rbacEnforcer == nil || !s.rbacEnforcer.Enabled() {
+		return nil, false, nil
+	}
+	fullMethod, ok := grpc.Method(ctx)
+	if !ok {
+		return nil, false, nil
+	}
+	action, ok := rbac.ActionFor(fullMethod)
+	if !ok {
+		return nil, false, nil
+	}
+	logger := logging.RequireLoggerFromContext(ctx)
+	obj := rbac.ObjectFor(req)
+	for _, subject := range rbacSubjects(claims) {
+		result, err := s.rbacEnforcer.Enforce(subject, action.Resource, action.Verb, obj)
+		if err != nil {
+			return nil, true, fmt.Errorf("rbac: failed to evaluate policy: %w", err)
+		}
+		if !result.Allowed {
+			continue
+		}
+		namespace, name, found := strings.Cut(result.ServiceAccount, "/")
+		if !found {
+			return nil, true, fmt.Errorf("rbac: linked service account %q for subject %q is not in namespace/name form", result.ServiceAccount, result.Subject)
+		}
+		serviceAccount, err := s.cache.ServiceAccountLister.ServiceAccounts(namespace).Get(name)
+		if err != nil {
+			return nil, true, fmt.Errorf("rbac: failed to get linked service account %s/%s: %w", namespace, name, err)
+		}
+		// important! write an audit entry (i.e. log entry) so we know which user performed an operation
+		logger.WithFields(logging.Fields{
+			"subject":        claims.Subject,
+			"email":          claims.Email,
+			"matchedSubject": result.Subject,
+			"serviceAccount": result.ServiceAccount,
+			"resource":       action.Resource,
+			"action":         action.Verb,
+			"object":         obj,
+		}).Info(ctx, "fine-grained RBAC policy authorized request")
+		clients, err := s.getClientsForServiceAccount(ctx, claims, serviceAccount)
+		return clients, true, err
+	}
+	return nil, true, fmt.Errorf("not allowed: no policy grants %s %s on %s", action.Verb, action.Resource, obj)
+}
+
+// rbacSubjects returns the identities to try, in order, against the fine-grained policy: the
+// caller's own subject and email, followed by each of their OIDC groups. A request is allowed
+// if any of these identities is granted the action by the policy.
+func rbacSubjects(claims *authTypes.Claims) []string {
+	subjects := make([]string, 0, len(claims.Groups)+2)
+	if claims.Subject != "" {
+		subjects = append(subjects, claims.Subject)
+	}
+	if claims.Email != "" {
+		subjects = append(subjects, claims.Email)
+	}
+	subjects = append(subjects, claims.Groups...)
+	return subjects
 }
 
 func (s *gatekeeper) authorizationForServiceAccount(ctx context.Context, serviceAccount *corev1.ServiceAccount) (string, error) {

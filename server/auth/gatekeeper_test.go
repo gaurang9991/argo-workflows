@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -21,6 +22,7 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 
 	fakewfclientset "github.com/argoproj/argo-workflows/v4/pkg/client/clientset/versioned/fake"
+	"github.com/argoproj/argo-workflows/v4/server/auth/rbac"
 	ssomocks "github.com/argoproj/argo-workflows/v4/server/auth/sso/mocks"
 	authTypes "github.com/argoproj/argo-workflows/v4/server/auth/types"
 	"github.com/argoproj/argo-workflows/v4/server/cache"
@@ -127,23 +129,23 @@ func TestServer_GetWFClient(t *testing.T) {
 	}
 	clients := &servertypes.Clients{Workflow: wfClient, Kubernetes: kubeClient}
 	t.Run("None", func(t *testing.T) {
-		_, err := NewGatekeeper(Modes{}, clients, nil, nil, clientForAuthorization, "", "", true, resourceCache, time.Minute)
+		_, err := NewGatekeeper(Modes{}, clients, nil, nil, clientForAuthorization, "", "", true, resourceCache, time.Minute, nil)
 		require.Error(t, err)
 	})
 	t.Run("Invalid", func(t *testing.T) {
-		g, err := NewGatekeeper(Modes{Client: true}, clients, nil, nil, clientForAuthorization, "", "", true, resourceCache, time.Minute)
+		g, err := NewGatekeeper(Modes{Client: true}, clients, nil, nil, clientForAuthorization, "", "", true, resourceCache, time.Minute, nil)
 		require.NoError(t, err)
 		_, err = g.Context(x(logging.TestContext(t.Context()), "invalid"))
 		require.Error(t, err)
 	})
 	t.Run("NotAllowed", func(t *testing.T) {
-		g, err := NewGatekeeper(Modes{SSO: true}, clients, nil, nil, clientForAuthorization, "", "", true, resourceCache, time.Minute)
+		g, err := NewGatekeeper(Modes{SSO: true}, clients, nil, nil, clientForAuthorization, "", "", true, resourceCache, time.Minute, nil)
 		require.NoError(t, err)
 		_, err = g.Context(x(logging.TestContext(t.Context()), "Bearer "))
 		require.Error(t, err)
 	})
 	t.Run("Client", func(t *testing.T) {
-		g, err := NewGatekeeper(Modes{Client: true}, clients, &rest.Config{Username: "my-username"}, nil, clientForAuthorization, "", "", true, resourceCache, time.Minute)
+		g, err := NewGatekeeper(Modes{Client: true}, clients, &rest.Config{Username: "my-username"}, nil, clientForAuthorization, "", "", true, resourceCache, time.Minute, nil)
 		require.NoError(t, err)
 		ctx, err := g.Context(x(logging.TestContext(t.Context()), "Bearer "))
 		require.NoError(t, err)
@@ -166,7 +168,7 @@ func TestServer_GetWFClient(t *testing.T) {
 	}
 	t.Run("ClientTokenRejected", func(t *testing.T) {
 		rejecting, reviews := reviewingClientForAuthorization(apierrors.NewUnauthorized("Unauthorized"))
-		g, err := NewGatekeeper(Modes{Client: true}, clients, &rest.Config{Username: "my-username"}, nil, rejecting, "", "", true, resourceCache, time.Minute)
+		g, err := NewGatekeeper(Modes{Client: true}, clients, &rest.Config{Username: "my-username"}, nil, rejecting, "", "", true, resourceCache, time.Minute, nil)
 		require.NoError(t, err)
 		for range 2 {
 			_, err = g.Context(x(logging.TestContext(t.Context()), "Bearer fake"))
@@ -177,7 +179,7 @@ func TestServer_GetWFClient(t *testing.T) {
 	})
 	t.Run("ClientTokenReviewCached", func(t *testing.T) {
 		accepting, reviews := reviewingClientForAuthorization(nil)
-		g, err := NewGatekeeper(Modes{Client: true}, clients, &rest.Config{Username: "my-username"}, nil, accepting, "", "", true, resourceCache, time.Minute)
+		g, err := NewGatekeeper(Modes{Client: true}, clients, &rest.Config{Username: "my-username"}, nil, accepting, "", "", true, resourceCache, time.Minute, nil)
 		require.NoError(t, err)
 		for range 2 {
 			_, err = g.Context(x(logging.TestContext(t.Context()), "Bearer one"))
@@ -190,7 +192,7 @@ func TestServer_GetWFClient(t *testing.T) {
 	})
 	t.Run("ClientTokenReviewCacheDisabled", func(t *testing.T) {
 		accepting, reviews := reviewingClientForAuthorization(nil)
-		g, err := NewGatekeeper(Modes{Client: true}, clients, &rest.Config{Username: "my-username"}, nil, accepting, "", "", true, resourceCache, 0)
+		g, err := NewGatekeeper(Modes{Client: true}, clients, &rest.Config{Username: "my-username"}, nil, accepting, "", "", true, resourceCache, 0, nil)
 		require.NoError(t, err)
 		for range 2 {
 			_, err = g.Context(x(logging.TestContext(t.Context()), "Bearer one"))
@@ -199,7 +201,7 @@ func TestServer_GetWFClient(t *testing.T) {
 		assert.Equal(t, 2, *reviews, "a zero TTL disables the cache")
 	})
 	t.Run("Server", func(t *testing.T) {
-		g, err := NewGatekeeper(Modes{Server: true}, clients, &rest.Config{Username: "my-username"}, nil, clientForAuthorization, "", "", true, resourceCache, time.Minute)
+		g, err := NewGatekeeper(Modes{Server: true}, clients, &rest.Config{Username: "my-username"}, nil, clientForAuthorization, "", "", true, resourceCache, time.Minute, nil)
 		require.NoError(t, err)
 		ctx, err := g.Context(x(logging.TestContext(t.Context()), ""))
 		require.NoError(t, err)
@@ -211,7 +213,7 @@ func TestServer_GetWFClient(t *testing.T) {
 		ssoIf := &ssomocks.Interface{}
 		ssoIf.On("Authorize", mock.Anything, mock.Anything).Return(&authTypes.Claims{Claims: jwt.Claims{Subject: "my-sub"}}, nil)
 		ssoIf.On("IsRBACEnabled").Return(false)
-		g, err := NewGatekeeper(Modes{SSO: true}, clients, &rest.Config{Username: "my-username"}, ssoIf, clientForAuthorization, "my-ns", "my-ns", true, resourceCache, time.Minute)
+		g, err := NewGatekeeper(Modes{SSO: true}, clients, &rest.Config{Username: "my-username"}, ssoIf, clientForAuthorization, "my-ns", "my-ns", true, resourceCache, time.Minute, nil)
 		require.NoError(t, err)
 		ctx, err := g.Context(x(logging.TestContext(t.Context()), "Bearer v2:whatever"))
 		require.NoError(t, err)
@@ -224,7 +226,7 @@ func TestServer_GetWFClient(t *testing.T) {
 		ssoIf := &ssomocks.Interface{}
 		ssoIf.On("Authorize", mock.Anything, mock.Anything).Return(&authTypes.Claims{Groups: []string{"my-group", "other-group"}}, nil)
 		ssoIf.On("IsRBACEnabled").Return(true)
-		g, err := NewGatekeeper(Modes{SSO: true}, clients, &rest.Config{Username: "my-username"}, ssoIf, clientForAuthorization, "my-ns", "my-ns", true, resourceCache, time.Minute)
+		g, err := NewGatekeeper(Modes{SSO: true}, clients, &rest.Config{Username: "my-username"}, ssoIf, clientForAuthorization, "my-ns", "my-ns", true, resourceCache, time.Minute, nil)
 		require.NoError(t, err)
 		ctx, err := g.Context(x(logging.TestContext(t.Context()), "Bearer v2:whatever"))
 		require.NoError(t, err)
@@ -241,7 +243,7 @@ func TestServer_GetWFClient(t *testing.T) {
 		ssoIf := &ssomocks.Interface{}
 		ssoIf.On("Authorize", mock.Anything, mock.Anything).Return(&authTypes.Claims{Groups: []string{"my-group", "other-group"}}, nil)
 		ssoIf.On("IsRBACEnabled").Return(true)
-		g, err := NewGatekeeper(Modes{SSO: true}, clients, &rest.Config{Username: "my-username"}, ssoIf, clientForAuthorization, "my-ns", "my-ns", false, resourceCache, time.Minute)
+		g, err := NewGatekeeper(Modes{SSO: true}, clients, &rest.Config{Username: "my-username"}, ssoIf, clientForAuthorization, "my-ns", "my-ns", false, resourceCache, time.Minute, nil)
 		require.NoError(t, err)
 		ctx, err := g.ContextWithRequest(x(logging.TestContext(t.Context()), "Bearer v2:whatever"), servertypes.NamespaceHolder("user1-ns"))
 		require.NoError(t, err)
@@ -257,7 +259,7 @@ func TestServer_GetWFClient(t *testing.T) {
 		ssoIf := &ssomocks.Interface{}
 		ssoIf.On("Authorize", mock.Anything, mock.Anything).Return(&authTypes.Claims{Groups: []string{"my-group", "other-group"}}, nil)
 		ssoIf.On("IsRBACEnabled").Return(true)
-		g, err := NewGatekeeper(Modes{SSO: true}, clients, &rest.Config{Username: "my-username"}, ssoIf, clientForAuthorization, "my-ns", "my-ns", true, resourceCache, time.Minute)
+		g, err := NewGatekeeper(Modes{SSO: true}, clients, &rest.Config{Username: "my-username"}, ssoIf, clientForAuthorization, "my-ns", "my-ns", true, resourceCache, time.Minute, nil)
 		require.NoError(t, err)
 		ctx, err := g.ContextWithRequest(x(logging.TestContext(t.Context()), "Bearer v2:whatever"), servertypes.NamespaceHolder("user1-ns"))
 		require.NoError(t, err)
@@ -274,7 +276,7 @@ func TestServer_GetWFClient(t *testing.T) {
 		ssoIf := &ssomocks.Interface{}
 		ssoIf.On("Authorize", mock.Anything, mock.Anything).Return(&authTypes.Claims{Groups: []string{"my-group", "other-group"}}, nil)
 		ssoIf.On("IsRBACEnabled").Return(true)
-		g, err := NewGatekeeper(Modes{SSO: true}, clients, &rest.Config{Username: "my-username"}, ssoIf, clientForAuthorization, "my-ns", "my-ns", false, resourceCache, time.Minute)
+		g, err := NewGatekeeper(Modes{SSO: true}, clients, &rest.Config{Username: "my-username"}, ssoIf, clientForAuthorization, "my-ns", "my-ns", false, resourceCache, time.Minute, nil)
 		require.NoError(t, err)
 		ctx, err := g.ContextWithRequest(x(logging.TestContext(t.Context()), "Bearer v2:whatever"), servertypes.NamespaceHolder("user2-ns"))
 		require.NoError(t, err)
@@ -291,7 +293,7 @@ func TestServer_GetWFClient(t *testing.T) {
 		ssoIf := &ssomocks.Interface{}
 		ssoIf.On("Authorize", mock.Anything, mock.Anything).Return(&authTypes.Claims{Groups: []string{"my-group", "other-group"}}, nil)
 		ssoIf.On("IsRBACEnabled").Return(true)
-		g, err := NewGatekeeper(Modes{SSO: true}, clients, &rest.Config{Username: "my-username"}, ssoIf, clientForAuthorization, "my-ns", "my-ns", false, resourceCache, time.Minute)
+		g, err := NewGatekeeper(Modes{SSO: true}, clients, &rest.Config{Username: "my-username"}, ssoIf, clientForAuthorization, "my-ns", "my-ns", false, resourceCache, time.Minute, nil)
 		require.NoError(t, err)
 		ctx, err := g.ContextWithRequest(x(logging.TestContext(t.Context()), "Bearer v2:whatever"), servertypes.NamespaceHolder("user3-ns"))
 		require.NoError(t, err)
@@ -311,7 +313,7 @@ func TestServer_GetWFClient(t *testing.T) {
 		ssoIf := &ssomocks.Interface{}
 		ssoIf.On("Authorize", mock.Anything, mock.Anything).Return(&authTypes.Claims{Groups: []string{"user1-only-group"}}, nil)
 		ssoIf.On("IsRBACEnabled").Return(true)
-		g, err := NewGatekeeper(Modes{SSO: true}, clients, &rest.Config{Username: "my-username"}, ssoIf, clientForAuthorization, "my-ns", "my-ns", false, resourceCache, time.Minute)
+		g, err := NewGatekeeper(Modes{SSO: true}, clients, &rest.Config{Username: "my-username"}, ssoIf, clientForAuthorization, "my-ns", "my-ns", false, resourceCache, time.Minute, nil)
 		require.NoError(t, err)
 		ctx, err := g.ContextWithRequest(x(logging.TestContext(t.Context()), "Bearer v2:whatever"), servertypes.NamespaceHolder("user1-ns"))
 		require.NoError(t, err)
@@ -324,7 +326,7 @@ func TestServer_GetWFClient(t *testing.T) {
 		ssoIf := &ssomocks.Interface{}
 		ssoIf.On("Authorize", mock.Anything, mock.Anything).Return(&authTypes.Claims{Groups: []string{"other-group"}}, nil)
 		ssoIf.On("IsRBACEnabled").Return(true)
-		g, err := NewGatekeeper(Modes{SSO: true}, clients, &rest.Config{Username: "my-username"}, ssoIf, clientForAuthorization, "my-ns", "my-ns", true, resourceCache, time.Minute)
+		g, err := NewGatekeeper(Modes{SSO: true}, clients, &rest.Config{Username: "my-username"}, ssoIf, clientForAuthorization, "my-ns", "my-ns", true, resourceCache, time.Minute, nil)
 		require.NoError(t, err)
 		ctx, err := g.Context(x(logging.TestContext(t.Context()), "Bearer v2:whatever"))
 		require.NoError(t, err)
@@ -334,12 +336,80 @@ func TestServer_GetWFClient(t *testing.T) {
 		ssoIf := &ssomocks.Interface{}
 		ssoIf.On("Authorize", mock.Anything, mock.Anything).Return(&authTypes.Claims{}, nil)
 		ssoIf.On("IsRBACEnabled").Return(true)
-		g, err := NewGatekeeper(Modes{SSO: true}, clients, &rest.Config{Username: "my-username"}, ssoIf, clientForAuthorization, "my-ns", "my-ns", true, resourceCache, time.Minute)
+		g, err := NewGatekeeper(Modes{SSO: true}, clients, &rest.Config{Username: "my-username"}, ssoIf, clientForAuthorization, "my-ns", "my-ns", true, resourceCache, time.Minute, nil)
 		require.NoError(t, err)
 		_, err = g.Context(x(logging.TestContext(t.Context()), "Bearer v2:whatever"))
 		require.EqualError(t, err, "rpc error: code = PermissionDenied desc = not allowed")
 	})
+	t.Run("SSO+RBAC,fine-grained policy allows", func(t *testing.T) {
+		enforcer := rbac.NewEnforcer()
+		require.NoError(t, enforcer.Load(&corev1.ConfigMap{
+			Data: map[string]string{
+				rbac.PolicyKey:                "g, my-group, role:team-a-operator\np, role:team-a-operator, workflows, resume, my-ns/*, allow",
+				rbac.LinkedServiceAccountsKey: "role:team-a-operator: my-ns/my-sa",
+			},
+		}))
+		ssoIf := &ssomocks.Interface{}
+		ssoIf.On("Authorize", mock.Anything, mock.Anything).Return(&authTypes.Claims{Groups: []string{"my-group"}}, nil)
+		ssoIf.On("IsRBACEnabled").Return(true)
+		g, err := NewGatekeeper(Modes{SSO: true}, clients, &rest.Config{Username: "my-username"}, ssoIf, clientForAuthorization, "my-ns", "my-ns", true, resourceCache, time.Minute, enforcer)
+		require.NoError(t, err)
+		ctx := withMethod(x(logging.TestContext(t.Context()), "Bearer v2:whatever"), "/workflow.WorkflowService/ResumeWorkflow")
+		ctx, err = g.ContextWithRequest(ctx, servertypes.NamespaceHolder("my-ns"))
+		require.NoError(t, err)
+		assert.Equal(t, "my-sa", GetClaims(ctx).ServiceAccountName)
+	})
+	t.Run("SSO+RBAC,fine-grained policy denies", func(t *testing.T) {
+		enforcer := rbac.NewEnforcer()
+		require.NoError(t, enforcer.Load(&corev1.ConfigMap{
+			Data: map[string]string{
+				rbac.PolicyKey:                "g, my-group, role:team-a-operator\np, role:team-a-operator, workflows, resume, my-ns/*, allow",
+				rbac.LinkedServiceAccountsKey: "role:team-a-operator: my-ns/my-sa",
+			},
+		}))
+		ssoIf := &ssomocks.Interface{}
+		// terminate is not granted, only resume is
+		ssoIf.On("Authorize", mock.Anything, mock.Anything).Return(&authTypes.Claims{Groups: []string{"my-group"}}, nil)
+		ssoIf.On("IsRBACEnabled").Return(true)
+		g, err := NewGatekeeper(Modes{SSO: true}, clients, &rest.Config{Username: "my-username"}, ssoIf, clientForAuthorization, "my-ns", "my-ns", true, resourceCache, time.Minute, enforcer)
+		require.NoError(t, err)
+		ctx := withMethod(x(logging.TestContext(t.Context()), "Bearer v2:whatever"), "/workflow.WorkflowService/TerminateWorkflow")
+		_, err = g.ContextWithRequest(ctx, servertypes.NamespaceHolder("my-ns"))
+		require.EqualError(t, err, "rpc error: code = PermissionDenied desc = not allowed")
+	})
+	t.Run("SSO+RBAC,fine-grained enforcer falls back to legacy for unmapped methods", func(t *testing.T) {
+		enforcer := rbac.NewEnforcer()
+		require.NoError(t, enforcer.Load(&corev1.ConfigMap{
+			Data: map[string]string{
+				rbac.PolicyKey:                "g, my-group, role:team-a-operator\np, role:team-a-operator, workflows, resume, my-ns/*, allow",
+				rbac.LinkedServiceAccountsKey: "role:team-a-operator: my-ns/my-sa",
+			},
+		}))
+		ssoIf := &ssomocks.Interface{}
+		ssoIf.On("Authorize", mock.Anything, mock.Anything).Return(&authTypes.Claims{Groups: []string{"my-group", "other-group"}}, nil)
+		ssoIf.On("IsRBACEnabled").Return(true)
+		g, err := NewGatekeeper(Modes{SSO: true}, clients, &rest.Config{Username: "my-username"}, ssoIf, clientForAuthorization, "my-ns", "my-ns", true, resourceCache, time.Minute, enforcer)
+		require.NoError(t, err)
+		// no fullMethod on the context at all, e.g. a plain Context() call: legacy annotation
+		// matching still applies (precedence=1 "my-sa" wins over precedence=0 "my-other-sa")
+		ctx, err := g.Context(x(logging.TestContext(t.Context()), "Bearer v2:whatever"))
+		require.NoError(t, err)
+		assert.Equal(t, "my-sa", GetClaims(ctx).ServiceAccountName)
+	})
 }
+
+// withMethod attaches a minimal gRPC server transport stream to ctx so that grpc.Method(ctx)
+// resolves fullMethod, mirroring what grpc-go does for real unary/streaming server calls.
+func withMethod(ctx context.Context, fullMethod string) context.Context {
+	return grpc.NewContextWithServerTransportStream(ctx, fakeServerTransportStream{fullMethod})
+}
+
+type fakeServerTransportStream struct{ method string }
+
+func (f fakeServerTransportStream) Method() string               { return f.method }
+func (f fakeServerTransportStream) SetHeader(metadata.MD) error  { return nil }
+func (f fakeServerTransportStream) SendHeader(metadata.MD) error { return nil }
+func (f fakeServerTransportStream) SetTrailer(metadata.MD) error { return nil }
 
 func x(ctx context.Context, authorization string) context.Context {
 	return metadata.NewIncomingContext(ctx, metadata.New(map[string]string{"authorization": authorization}))

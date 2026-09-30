@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	k8scache "k8s.io/client-go/tools/cache"
 	"k8s.io/utils/env"
 
 	argo "github.com/argoproj/argo-workflows/v4"
@@ -50,6 +51,7 @@ import (
 	"github.com/argoproj/argo-workflows/v4/server/artifacts"
 	"github.com/argoproj/argo-workflows/v4/server/auth"
 	authcookie "github.com/argoproj/argo-workflows/v4/server/auth/cookie"
+	authrbac "github.com/argoproj/argo-workflows/v4/server/auth/rbac"
 	"github.com/argoproj/argo-workflows/v4/server/auth/sso"
 	"github.com/argoproj/argo-workflows/v4/server/auth/webhook"
 	"github.com/argoproj/argo-workflows/v4/server/cache"
@@ -144,6 +146,7 @@ func NewArgoServer(ctx context.Context, opts ArgoServerOpts) (Server, error) {
 	configController := config.NewController(opts.Namespace, opts.ConfigName, opts.Clients.Kubernetes)
 	log := logging.RequireLoggerFromContext(ctx)
 	var resourceCache *cache.ResourceCache
+	var rbacEnforcer *authrbac.Enforcer
 	ssoIf := sso.NullSSO
 	if opts.AuthModes[auth.SSO] {
 		c, err := configController.Get(ctx)
@@ -161,12 +164,20 @@ func NewArgoServer(ctx context.Context, opts ArgoServerOpts) (Server, error) {
 			// resourceCache is only used for SSO RBAC
 			resourceCache = cache.NewResourceCache(opts.Clients.Kubernetes, getResourceCacheNamespace(opts.ManagedNamespace))
 			resourceCache.Run(ctx.Done())
+			if policyConfigMap := c.SSO.RBAC.GetPolicyConfigMap(); policyConfigMap != "" {
+				rbacEnforcer = authrbac.NewEnforcer()
+				informer := authrbac.NewConfigMapInformer(ctx, opts.Clients.Kubernetes, opts.Namespace, policyConfigMap, rbacEnforcer)
+				go informer.Run(ctx.Done())
+				if !k8scache.WaitForCacheSync(ctx.Done(), informer.HasSynced) {
+					return nil, fmt.Errorf("failed to sync RBAC policy config map %q", policyConfigMap)
+				}
+			}
 		}
 		log.Info(ctx, "SSO enabled")
 	} else {
 		log.Info(ctx, "SSO disabled")
 	}
-	gatekeeper, err := auth.NewGatekeeper(opts.AuthModes, opts.Clients, opts.RestConfig, ssoIf, auth.DefaultClientForAuthorization, opts.Namespace, opts.SSONamespace, opts.Namespaced, resourceCache, envutil.LookupEnvDurationOr(ctx, "ARGO_SERVER_TOKEN_REVIEW_CACHE_TTL", time.Minute))
+	gatekeeper, err := auth.NewGatekeeper(opts.AuthModes, opts.Clients, opts.RestConfig, ssoIf, auth.DefaultClientForAuthorization, opts.Namespace, opts.SSONamespace, opts.Namespaced, resourceCache, envutil.LookupEnvDurationOr(ctx, "ARGO_SERVER_TOKEN_REVIEW_CACHE_TTL", time.Minute), rbacEnforcer)
 	if err != nil {
 		return nil, err
 	}
