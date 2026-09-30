@@ -93,7 +93,7 @@ type WorkflowArchive interface {
 type workflowArchive struct {
 	sessionProxy      *sqldb.SessionProxy
 	clusterName       string
-	managedNamespace  string
+	managedNamespaces []string
 	instanceIDService instanceid.Service
 	dbType            sqldb.DBType
 }
@@ -103,8 +103,8 @@ func (r *workflowArchive) IsEnabled() bool {
 }
 
 // NewWorkflowArchive returns a new workflowArchive
-func NewWorkflowArchive(sessionProxy *sqldb.SessionProxy, clusterName, managedNamespace string, instanceIDService instanceid.Service) WorkflowArchive {
-	return &workflowArchive{sessionProxy: sessionProxy, clusterName: clusterName, managedNamespace: managedNamespace, instanceIDService: instanceIDService, dbType: sessionProxy.DBType()}
+func NewWorkflowArchive(sessionProxy *sqldb.SessionProxy, clusterName string, managedNamespaces []string, instanceIDService instanceid.Service) WorkflowArchive {
+	return &workflowArchive{sessionProxy: sessionProxy, clusterName: clusterName, managedNamespaces: managedNamespaces, instanceIDService: instanceIDService, dbType: sessionProxy.DBType()}
 }
 
 func (r *workflowArchive) ArchiveWorkflow(ctx context.Context, wf *wfv1.Workflow) error {
@@ -518,7 +518,7 @@ func (r *workflowArchive) HasMoreWorkflows(ctx context.Context, options sutils.L
 func (r *workflowArchive) clusterManagedNamespaceAndInstanceID() *db.AndExpr {
 	return db.And(
 		db.Cond{"clustername": r.clusterName},
-		namespaceEqual(r.managedNamespace),
+		namespaceIn(r.managedNamespaces),
 		db.Cond{"instanceid": r.instanceIDService.InstanceID()},
 	)
 }
@@ -556,6 +556,19 @@ func namespaceEqual(namespace string) db.Cond {
 		return db.Cond{"namespace": namespace}
 	}
 	return db.Cond{}
+}
+
+// namespaceIn restricts to a static set of namespaces: no-op if empty (cluster-wide), a plain
+// equality for a single namespace, or an IN (...) for several.
+func namespaceIn(namespaces []string) db.Cond {
+	switch len(namespaces) {
+	case 0:
+		return db.Cond{}
+	case 1:
+		return db.Cond{"namespace": namespaces[0]}
+	default:
+		return db.Cond{"namespace": db.In(namespaces)}
+	}
 }
 
 func namespaceNotEqual(namespace string) db.Cond {

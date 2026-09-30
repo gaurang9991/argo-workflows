@@ -13,6 +13,7 @@ export interface Column {
 export interface Info {
     modals: {string: boolean};
     managedNamespace?: string;
+    managedNamespaces?: string[];
     links?: Link[];
     navColor?: string;
     columns: Column[];

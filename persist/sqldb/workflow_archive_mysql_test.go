@@ -73,7 +73,7 @@ func setupMySQLArchiveTest(ctx context.Context, t *testing.T, v usqldb.MySQLVari
 
 	t.Cleanup(func() { proxy.Close() })
 
-	return NewWorkflowArchive(proxy, "test", "", instanceid.NewService(""))
+	return NewWorkflowArchive(proxy, "test", nil, instanceid.NewService(""))
 }
 
 // TestMySQLListWorkflows verifies that JSON_EXTRACT/JSON_UNQUOTE queries in

@@ -1,4 +1,5 @@
 const managedNamespaceKey = 'managedNamespace';
+const managedNamespacesKey = 'managedNamespaces';
 const userNamespaceKey = 'userNamespace';
 const currentNamespaceKey = 'current_namespace';
 
@@ -38,6 +39,29 @@ export function setManagedNamespace(value: string) {
 
 export function getManagedNamespace() {
     return fixLocalStorageString(localStorage.getItem(managedNamespaceKey));
+}
+
+// setManagedNamespaces stores the full static allowlist of namespaces the controller/server is
+// scoped to (may be more than one); use getManagedNamespaces() to read it back.
+export function setManagedNamespaces(values: string[]) {
+    if (values && values.length > 0) {
+        localStorage.setItem(managedNamespacesKey, JSON.stringify(values));
+    } else {
+        localStorage.removeItem(managedNamespacesKey);
+    }
+}
+
+export function getManagedNamespaces(): string[] {
+    const raw = fixLocalStorageString(localStorage.getItem(managedNamespacesKey));
+    if (!raw) {
+        return [];
+    }
+    try {
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
+    } catch {
+        return [];
+    }
 }
 
 export function setCurrentNamespace(value: string) {

@@ -73,7 +73,7 @@ func TestServer_K8sUtilsCache(t *testing.T) {
 				"token": {},
 			},
 		})
-	cache := NewResourceCache(kubeClient, v1.NamespaceAll)
+	cache := NewResourceCache(kubeClient, nil)
 	ctx := logging.TestContext(t.Context())
 	cache.Run(ctx.Done())
 

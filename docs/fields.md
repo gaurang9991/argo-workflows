@@ -497,7 +497,8 @@ _No description available_
 |:----------:|:----------:|---------------|
 |`columns`|`Array<`[`Column`](#column)`>`|_No description available_|
 |`links`|`Array<`[`Link`](#link)`>`|_No description available_|
-|`managedNamespace`|`string`|_No description available_|
+|`managedNamespace`|`string`|managedNamespace is deprecated in favor of managedNamespaces, and is only set when there is exactly one managed namespace (empty for cluster-wide or multiple managed namespaces).|
+|`managedNamespaces`|`Array< string >`|managedNamespaces is the static allowlist of namespaces this controller/server is scoped to, if any (empty means cluster-wide).|
 |`modals`|`Map< boolean , string >`|which modals to show|
 |`navColor`|`string`|_No description available_|
 

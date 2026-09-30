@@ -47,6 +47,12 @@ type Config struct {
 	// Namespace is a label selector filter to limit the controller's watch to a specific namespace
 	Namespace string `json:"namespace,omitempty"`
 
+	// ManagedNamespaces is a static allowlist of namespaces the controller watches, instead of
+	// either a single namespace (Namespace/--managed-namespace) or the whole cluster. Mutually
+	// exclusive with cluster-scoped (all namespaces) mode. If set, it takes precedence over
+	// Namespace/--managed-namespace.
+	ManagedNamespaces []string `json:"managedNamespaces,omitempty"`
+
 	// InstanceID is a label selector to limit the controller's watch to a specific instance. It
 	// contains an arbitrary value that is carried forward into its pod labels, under the key
 	// workflows.argoproj.io/controller-instanceid, for the purposes of workflow segregation. This

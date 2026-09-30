@@ -58,17 +58,19 @@ type Controller struct {
 }
 
 // NewController creates a pod controller
-func NewController(ctx context.Context, config *argoConfig.Config, restConfig *rest.Config, namespace string, clientSet kubernetes.Interface, wfInformer cache.SharedIndexInformer, metrics *metrics.Metrics, callback podEventCallback) *Controller {
+func NewController(ctx context.Context, config *argoConfig.Config, restConfig *rest.Config, namespaces []string, clientSet kubernetes.Interface, wfInformer cache.SharedIndexInformer, metrics *metrics.Metrics, callback podEventCallback) *Controller {
 	ctx, log := logging.RequireLoggerFromContext(ctx).WithField("component", "pod_controller").InContext(ctx)
 	podController := &Controller{
 		config:        config,
 		kubeclientset: clientSet,
 		wfInformer:    wfInformer,
 		workqueue:     metrics.RateLimiterWithBusyWorkers(ctx, workqueue.DefaultTypedControllerRateLimiter[string](), "pod_cleanup_queue"),
-		podInformer:   newInformer(clientSet, &config.InstanceID, &namespace),
-		log:           log,
-		callBack:      callback,
-		restConfig:    restConfig,
+		podInformer: informerutil.NewMultiNamespaceIndexInformer(namespaces, func(ns string) cache.SharedIndexInformer {
+			return newInformer(clientSet, &config.InstanceID, &ns)
+		}),
+		log:        log,
+		callBack:   callback,
+		restConfig: restConfig,
 	}
 	//nolint:errcheck // the error only happens if the informer was stopped, and it hasn't even started (https://github.com/kubernetes/client-go/blob/46588f2726fa3e25b1704d6418190f424f95a990/tools/cache/shared_informer.go#L580)
 	podController.podInformer.AddEventHandler(

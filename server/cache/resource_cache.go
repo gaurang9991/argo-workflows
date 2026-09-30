@@ -10,33 +10,51 @@ import (
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	v1 "k8s.io/client-go/listers/core/v1"
+	"k8s.io/client-go/tools/cache"
+
+	informerutil "github.com/argoproj/argo-workflows/v4/util/informer"
 )
 
 type ResourceCache struct {
 	cache  Interface
 	client kubernetes.Interface
 	v1.ServiceAccountLister
-	informerFactory informers.SharedInformerFactory
+	informerFactories []informers.SharedInformerFactory
 }
 
-func NewResourceCacheWithTimeout(client kubernetes.Interface, namespace string, timeout time.Duration) *ResourceCache {
-	informerFactory := informers.NewSharedInformerFactoryWithOptions(client, time.Minute*20, informers.WithNamespace(namespace))
-	cache := &ResourceCache{
+// NewResourceCacheWithTimeout builds a ResourceCache scoped to namespaces (nil/empty means
+// every namespace).
+func NewResourceCacheWithTimeout(client kubernetes.Interface, namespaces []string, timeout time.Duration) *ResourceCache {
+	if len(namespaces) == 0 {
+		namespaces = []string{""}
+	}
+	factories := make([]informers.SharedInformerFactory, len(namespaces))
+	informer := informerutil.NewMultiNamespaceIndexInformer(namespaces, func(ns string) cache.SharedIndexInformer {
+		factory := informers.NewSharedInformerFactoryWithOptions(client, time.Minute*20, informers.WithNamespace(ns))
+		for i, n := range namespaces {
+			if n == ns {
+				factories[i] = factory
+			}
+		}
+		return factory.Core().V1().ServiceAccounts().Informer()
+	})
+	return &ResourceCache{
 		cache:                NewLRUTtlCache(timeout, 2000),
 		client:               client,
-		ServiceAccountLister: informerFactory.Core().V1().ServiceAccounts().Lister(),
-		informerFactory:      informerFactory,
+		ServiceAccountLister: v1.NewServiceAccountLister(informer.GetIndexer()),
+		informerFactories:    factories,
 	}
-	return cache
 }
 
-func NewResourceCache(client kubernetes.Interface, namespace string) *ResourceCache {
-	return NewResourceCacheWithTimeout(client, namespace, time.Minute*1)
+func NewResourceCache(client kubernetes.Interface, namespaces []string) *ResourceCache {
+	return NewResourceCacheWithTimeout(client, namespaces, time.Minute*1)
 }
 
 func (c *ResourceCache) Run(stopCh <-chan struct{}) {
-	c.informerFactory.Start(stopCh)
-	c.informerFactory.WaitForCacheSync(stopCh)
+	for _, factory := range c.informerFactories {
+		factory.Start(stopCh)
+		factory.WaitForCacheSync(stopCh)
+	}
 }
 
 func (c *ResourceCache) GetSecret(ctx context.Context, namespace string, secretName string) (*corev1.Secret, error) {

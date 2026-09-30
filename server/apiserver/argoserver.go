@@ -25,7 +25,6 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
-	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
@@ -93,7 +92,7 @@ type argoServer struct {
 	tlsConfig                *tls.Config
 	hsts                     bool
 	namespace                string
-	managedNamespace         string
+	managedNamespaces        []string
 	clients                  *types.Clients
 	gatekeeper               auth.Gatekeeper
 	oAuth2Service            sso.Interface
@@ -121,7 +120,7 @@ type ArgoServerOpts struct {
 	AuthModes  auth.Modes
 	// config map name
 	ConfigName               string
-	ManagedNamespace         string
+	ManagedNamespace         []string
 	SSONamespace             string
 	HSTS                     bool
 	EventOperationQueueSize  int
@@ -133,11 +132,8 @@ type ArgoServerOpts struct {
 	AllowedLinkProtocol      []string
 }
 
-func getResourceCacheNamespace(managedNamespace string) string {
-	if managedNamespace != "" {
-		return managedNamespace
-	}
-	return v1.NamespaceAll
+func getResourceCacheNamespaces(managedNamespaces []string) []string {
+	return managedNamespaces
 }
 
 func NewArgoServer(ctx context.Context, opts ArgoServerOpts) (Server, error) {
@@ -159,7 +155,7 @@ func NewArgoServer(ctx context.Context, opts ArgoServerOpts) (Server, error) {
 		}
 		if ssoIf.IsRBACEnabled() {
 			// resourceCache is only used for SSO RBAC
-			resourceCache = cache.NewResourceCache(opts.Clients.Kubernetes, getResourceCacheNamespace(opts.ManagedNamespace))
+			resourceCache = cache.NewResourceCache(opts.Clients.Kubernetes, getResourceCacheNamespaces(opts.ManagedNamespace))
 			resourceCache.Run(ctx.Done())
 		}
 		log.Info(ctx, "SSO enabled")
@@ -188,7 +184,7 @@ func NewArgoServer(ctx context.Context, opts ArgoServerOpts) (Server, error) {
 		tlsConfig:                opts.TLSConfig,
 		hsts:                     opts.HSTS,
 		namespace:                opts.Namespace,
-		managedNamespace:         opts.ManagedNamespace,
+		managedNamespaces:        opts.ManagedNamespace,
 		clients:                  opts.Clients,
 		gatekeeper:               gatekeeper,
 		oAuth2Service:            ssoIf,
@@ -265,10 +261,10 @@ func (as *argoServer) Run(ctx context.Context, port int, browserOpenFunc func(st
 		}
 		// we always enable the archive for the Argo Server, as the Argo Server does not write records, so you can
 		// disable the archiving - and still read old records
-		wfArchive = persist.NewWorkflowArchive(sessionProxy, persistence.GetClusterName(), as.managedNamespace, instanceIDService)
+		wfArchive = persist.NewWorkflowArchive(sessionProxy, persistence.GetClusterName(), as.managedNamespaces, instanceIDService)
 	}
-	resourceCacheNamespace := getResourceCacheNamespace(as.managedNamespace)
-	wftmplStore, err := workflowtemplate.NewInformer(as.restConfig, resourceCacheNamespace)
+	resourceCacheNamespaces := getResourceCacheNamespaces(as.managedNamespaces)
+	wftmplStore, err := workflowtemplate.NewInformer(as.restConfig, resourceCacheNamespaces)
 	if err != nil {
 		log.WithFatal().Error(ctx, err.Error())
 	}
@@ -283,7 +279,11 @@ func (as *argoServer) Run(ctx context.Context, port int, browserOpenFunc func(st
 		cwftmplInformer = clusterworkflowtemplate.NewNullClusterWorkflowTemplate()
 	}
 	eventRecorderManager := events.NewEventRecorderManager(as.clients.Kubernetes)
-	artifactRepositories := artifactrepositories.New(as.clients.Kubernetes, as.managedNamespace, &config.ArtifactRepository)
+	artifactRepositoryNamespace := as.namespace
+	if len(as.managedNamespaces) > 0 {
+		artifactRepositoryNamespace = as.managedNamespaces[0]
+	}
+	artifactRepositories := artifactrepositories.New(as.clients.Kubernetes, artifactRepositoryNamespace, &config.ArtifactRepository)
 	artifactServer := artifacts.NewArtifactServer(as.gatekeeper, hydrator.New(offloadRepo), wfArchive, instanceIDService, artifactRepositories, log)
 	eventServer := event.NewController(ctx, instanceIDService, eventRecorderManager, as.eventQueueSize, as.eventWorkerCount, as.eventAsyncDispatch)
 	wfArchiveServer := workflowarchive.NewWorkflowArchiveServer(wfArchive, offloadRepo, config.WorkflowDefaults)
@@ -293,7 +293,7 @@ func (as *argoServer) Run(ctx context.Context, port int, browserOpenFunc func(st
 	if err != nil {
 		log.WithFatal().Error(ctx, err.Error())
 	}
-	workflowServer := workflow.NewServer(ctx, instanceIDService, offloadRepo, wfArchive, as.clients.Workflow, wfStore, wfStore, wftmplStore, cwftmplInformer, config.WorkflowDefaults, &resourceCacheNamespace, artifactRepositories)
+	workflowServer := workflow.NewServer(ctx, instanceIDService, offloadRepo, wfArchive, as.clients.Workflow, wfStore, wfStore, wftmplStore, cwftmplInformer, config.WorkflowDefaults, resourceCacheNamespaces, artifactRepositories)
 	grpcServer := as.newGRPCServer(ctx, instanceIDService, workflowServer, wftmplStore, cwftmplInformer, wfArchiveServer, syncServer, eventServer, config.Links, config.Columns, config.NavColor, config.WorkflowDefaults)
 	httpServer := as.newHTTPServer(ctx, port, artifactServer)
 
@@ -388,7 +388,7 @@ func (as *argoServer) newGRPCServer(ctx context.Context, instanceIDService insta
 	}
 
 	grpcServer := grpc.NewServer(sOpts...)
-	infopkg.RegisterInfoServiceServer(grpcServer, info.NewInfoServer(as.managedNamespace, links, columns, navColor))
+	infopkg.RegisterInfoServiceServer(grpcServer, info.NewInfoServer(as.managedNamespaces, links, columns, navColor))
 	eventpkg.RegisterEventServiceServer(grpcServer, eventServer)
 	eventsourcepkg.RegisterEventSourceServiceServer(grpcServer, eventsource.NewEventSourceServer())
 	sensorpkg.RegisterSensorServiceServer(grpcServer, sensor.NewSensorServer())

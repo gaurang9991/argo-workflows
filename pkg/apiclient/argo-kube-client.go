@@ -149,7 +149,7 @@ func (a *argoKubeClient) startStores(ctx context.Context, restConfig *restclient
 	}
 
 	if a.opts.CacheWorkflowTemplates {
-		wftmplInformer, err := workflowtemplateserver.NewInformer(restConfig, a.namespace)
+		wftmplInformer, err := workflowtemplateserver.NewInformer(restConfig, []string{a.namespace})
 		if err != nil {
 			return err
 		}
@@ -179,7 +179,7 @@ func (a *argoKubeClient) startStores(ctx context.Context, restConfig *restclient
 
 func (a *argoKubeClient) NewWorkflowServiceClient(ctx context.Context) workflowpkg.WorkflowServiceClient {
 	wfArchive := sqldb.NullWorkflowArchive
-	wfServer := workflowserver.NewServer(ctx, a.instanceIDService, argoKubeOffloadNodeStatusRepo, wfArchive, a.wfClient, a.wfLister, a.wfStore, a.wfTmplStore, a.cwfTmplStore, nil, &a.namespace, nil)
+	wfServer := workflowserver.NewServer(ctx, a.instanceIDService, argoKubeOffloadNodeStatusRepo, wfArchive, a.wfClient, a.wfLister, a.wfStore, a.wfTmplStore, a.cwfTmplStore, nil, []string{a.namespace}, nil)
 	go wfServer.Run(a.opts.CachingCloseCh)
 	return &errorTranslatingWorkflowServiceClient{&argoKubeWorkflowServiceClient{wfServer}}
 }

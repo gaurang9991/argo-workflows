@@ -34,6 +34,6 @@ func (n *explosiveOffloadNodeStatusRepo) Delete(context.Context, string, string)
 	return ErrOffloadNotSupported
 }
 
-func (n *explosiveOffloadNodeStatusRepo) ListOldOffloads(context.Context, string) (map[string][]string, error) {
+func (n *explosiveOffloadNodeStatusRepo) ListOldOffloads(context.Context, []string) (map[string][]string, error) {
 	return nil, ErrOffloadNotSupported
 }

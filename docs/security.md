@@ -10,7 +10,7 @@ This has three parts.
 
 ### Controller Permissions
 
-The controller has permission (via Kubernetes RBAC + its config map) with either all namespaces (cluster-scope install) or a single [managed namespace](managed-namespace.md) (namespace-install), notably:
+The controller has permission (via Kubernetes RBAC + its config map) with either all namespaces (cluster-scope install), a single [managed namespace](managed-namespace.md) (namespace-install), or a static allowlist of several [managed namespaces](managed-namespace.md#multiple-managed-namespaces), notably:
 
 * List/get/update workflows, and cron-workflows.
 * Create/get/delete pods, PVCs, and PDBs.

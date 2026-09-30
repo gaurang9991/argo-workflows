@@ -90,13 +90,13 @@ func (_m *OffloadNodeStatusRepo) List(ctx context.Context, namespace string) (ma
 	return r0, r1
 }
 
-// ListOldOffloads provides a mock function with given fields: namespace
-func (_m *OffloadNodeStatusRepo) ListOldOffloads(ctx context.Context, namespace string) (map[string][]string, error) {
-	ret := _m.Called(namespace)
+// ListOldOffloads provides a mock function with given fields: namespaces
+func (_m *OffloadNodeStatusRepo) ListOldOffloads(ctx context.Context, namespaces []string) (map[string][]string, error) {
+	ret := _m.Called(namespaces)
 
 	var r0 map[string][]string
-	if rf, ok := ret.Get(0).(func(string) map[string][]string); ok {
-		r0 = rf(namespace)
+	if rf, ok := ret.Get(0).(func([]string) map[string][]string); ok {
+		r0 = rf(namespaces)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(map[string][]string)
@@ -104,8 +104,8 @@ func (_m *OffloadNodeStatusRepo) ListOldOffloads(ctx context.Context, namespace 
 	}
 
 	var r1 error
-	if rf, ok := ret.Get(1).(func(string) error); ok {
-		r1 = rf(namespace)
+	if rf, ok := ret.Get(1).(func([]string) error); ok {
+		r1 = rf(namespaces)
 	} else {
 		r1 = ret.Error(1)
 	}

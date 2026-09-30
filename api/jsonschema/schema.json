@@ -5817,6 +5817,12 @@
         "managedNamespace": {
           "type": "string"
         },
+        "managedNamespaces": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "modals": {
           "additionalProperties": {
             "type": "boolean"

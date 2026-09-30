@@ -67,8 +67,8 @@ func NewRootCommand() *cobra.Command {
 		workflowArchiveWorkers       int    // --workflow-archive-workers
 		burst                        int
 		qps                          float32
-		namespaced                   bool   // --namespaced
-		managedNamespace             string // --managed-namespace
+		namespaced                   bool     // --namespaced
+		managedNamespace             []string // --managed-namespace
 		executorPlugins              bool
 		workflowLevelExecutorPlugins bool
 	)
@@ -115,12 +115,12 @@ func NewRootCommand() *cobra.Command {
 			kubeclientset := kubernetes.NewForConfigOrDie(config)
 			wfclientset := wfclientset.NewForConfigOrDie(config)
 
-			if !namespaced && managedNamespace != "" {
+			if !namespaced && len(managedNamespace) > 0 {
 				log.Warn(ctx, "ignoring --managed-namespace because --namespaced is false")
-				managedNamespace = ""
+				managedNamespace = nil
 			}
-			if namespaced && managedNamespace == "" {
-				managedNamespace = namespace
+			if namespaced && len(managedNamespace) == 0 {
+				managedNamespace = []string{namespace}
 			}
 			wfController, err := controller.NewWorkflowController(ctx, config, kubeclientset, wfclientset, namespace, managedNamespace, executorImage, executorImagePullPolicy, logFormat, configMap, executorPlugins, workflowLevelExecutorPlugins)
 			if err != nil {
@@ -219,7 +219,7 @@ func NewRootCommand() *cobra.Command {
 	command.Flags().IntVar(&burst, "burst", 30, "Maximum burst for throttle.")
 	command.Flags().Float32Var(&qps, "qps", 20.0, "Queries per second")
 	command.Flags().BoolVar(&namespaced, "namespaced", false, "run workflow-controller as namespaced mode")
-	command.Flags().StringVar(&managedNamespace, "managed-namespace", "", "namespace that workflow-controller watches, default to the installation namespace")
+	command.Flags().StringSliceVar(&managedNamespace, "managed-namespace", nil, "comma-separated list of namespaces that workflow-controller watches, default to the installation namespace")
 	command.Flags().BoolVar(&executorPlugins, "executor-plugins", false, "enable executor plugins")
 	command.Flags().BoolVar(&workflowLevelExecutorPlugins, "workflow-level-executor-plugins", false, "enable workflow-level executor plugins")
 	ctx, log, err := cmdutil.ContextWithLogger(&command, logLevel, logFormat)

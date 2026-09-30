@@ -7,7 +7,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
-	"k8s.io/client-go/informers"
 	"k8s.io/client-go/tools/cache"
 
 	"github.com/argoproj/argo-workflows/v4/pkg/apis/workflow"
@@ -17,28 +16,34 @@ import (
 )
 
 type tolerantWorkflowTemplateInformer struct {
-	delegate informers.GenericInformer
+	informer cache.SharedIndexInformer
 }
 
 // NewTolerantWorkflowTemplateInformer is a drop-in replacement for `extwfv1.WorkflowTemplateInformer` that ignores malformed resources.
-func NewTolerantWorkflowTemplateInformer(dynamicInterface dynamic.Interface, defaultResync time.Duration, namespace string) extwfv1.WorkflowTemplateInformer {
-	delegate := dynamicinformer.NewFilteredDynamicSharedInformerFactory(dynamicInterface, defaultResync, namespace, func(options *metav1.ListOptions) {
-		// `ResourceVersion=0` does not honor the `limit` in API calls, which results in making significant List calls
-		// without `limit`. For details, see https://github.com/argoproj/argo-workflows/pull/11343
-		// Check if ResourceVersion is "0" and reset it to empty string to ensure proper pagination behavior
-		if options.ResourceVersion == "0" {
-			options.ResourceVersion = ""
-		}
-	}).ForResource(schema.GroupVersionResource{Group: workflow.Group, Version: workflow.Version, Resource: workflow.WorkflowTemplatePlural})
-	//nolint:errcheck // the error only happens if the informer was already started, and it hasn't been
-	delegate.Informer().SetTransform(informerutil.StripManagedFields)
-	return &tolerantWorkflowTemplateInformer{delegate: delegate}
+// namespaces is the static set of namespaces to watch; an empty slice (or a slice containing
+// "") watches every namespace.
+func NewTolerantWorkflowTemplateInformer(dynamicInterface dynamic.Interface, defaultResync time.Duration, namespaces []string) extwfv1.WorkflowTemplateInformer {
+	resource := schema.GroupVersionResource{Group: workflow.Group, Version: workflow.Version, Resource: workflow.WorkflowTemplatePlural}
+	informer := informerutil.NewMultiNamespaceIndexInformer(namespaces, func(ns string) cache.SharedIndexInformer {
+		delegate := dynamicinformer.NewFilteredDynamicSharedInformerFactory(dynamicInterface, defaultResync, ns, func(options *metav1.ListOptions) {
+			// `ResourceVersion=0` does not honor the `limit` in API calls, which results in making significant List calls
+			// without `limit`. For details, see https://github.com/argoproj/argo-workflows/pull/11343
+			// Check if ResourceVersion is "0" and reset it to empty string to ensure proper pagination behavior
+			if options.ResourceVersion == "0" {
+				options.ResourceVersion = ""
+			}
+		}).ForResource(resource)
+		//nolint:errcheck // the error only happens if the informer was already started, and it hasn't been
+		delegate.Informer().SetTransform(informerutil.StripManagedFields)
+		return delegate.Informer()
+	})
+	return &tolerantWorkflowTemplateInformer{informer: informer}
 }
 
 func (t *tolerantWorkflowTemplateInformer) Informer() cache.SharedIndexInformer {
-	return t.delegate.Informer()
+	return t.informer
 }
 
 func (t *tolerantWorkflowTemplateInformer) Lister() v1alpha1.WorkflowTemplateLister {
-	return &tolerantWorkflowTemplateLister{delegate: t.delegate.Lister()}
+	return &tolerantWorkflowTemplateLister{delegate: cache.NewGenericLister(t.informer.GetIndexer(), schema.GroupResource{Group: workflow.Group, Resource: workflow.WorkflowTemplatePlural})}
 }

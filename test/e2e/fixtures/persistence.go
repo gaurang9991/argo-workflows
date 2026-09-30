@@ -42,7 +42,7 @@ func NewPersistence(ctx context.Context, kubeClient kubernetes.Interface, wcConf
 			panic(err)
 		}
 		instanceIDService := instanceid.NewService(wcConfig.InstanceID)
-		workflowArchive := persist.NewWorkflowArchive(sessionProxy, persistence.GetClusterName(), Namespace, instanceIDService)
+		workflowArchive := persist.NewWorkflowArchive(sessionProxy, persistence.GetClusterName(), []string{Namespace}, instanceIDService)
 		return &Persistence{workflowArchive, sessionProxy, offloadNodeStatusRepo}
 	}
 	return &Persistence{OffloadNodeStatusRepo: persist.ExplosiveOffloadNodeStatusRepo, WorkflowArchive: persist.NullWorkflowArchive}

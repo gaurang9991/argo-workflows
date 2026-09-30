@@ -12,10 +12,10 @@ import (
 )
 
 type infoServer struct {
-	managedNamespace string
-	links            []*wfv1.Link
-	columns          []*wfv1.Column
-	navColor         string
+	managedNamespaces []string
+	links             []*wfv1.Link
+	columns           []*wfv1.Column
+	navColor          string
 }
 
 func (i *infoServer) GetUserInfo(ctx context.Context, _ *infopkg.GetUserInfoRequest) (*infopkg.GetUserInfoResponse, error) {
@@ -41,12 +41,20 @@ func (i *infoServer) GetInfo(context.Context, *infopkg.GetInfoRequest) (*infopkg
 		"firstTimeUser": os.Getenv("FIRST_TIME_USER_MODAL") != "false",
 		"newVersion":    os.Getenv("NEW_VERSION_MODAL") != "false",
 	}
+	// managedNamespace is deprecated in favor of managedNamespaces, and is only populated when
+	// there's exactly one managed namespace, matching its pre-multi-namespace semantics (older
+	// UI/clients use its mere presence to mean "locked to this one namespace, hide the selector").
+	var managedNamespace string
+	if len(i.managedNamespaces) == 1 {
+		managedNamespace = i.managedNamespaces[0]
+	}
 	return &infopkg.InfoResponse{
-		ManagedNamespace: i.managedNamespace,
-		Links:            i.links,
-		Columns:          i.columns,
-		Modals:           modals,
-		NavColor:         i.navColor,
+		ManagedNamespace:  managedNamespace,
+		ManagedNamespaces: i.managedNamespaces,
+		Links:             i.links,
+		Columns:           i.columns,
+		Modals:            modals,
+		NavColor:          i.navColor,
 	}, nil
 }
 
@@ -73,6 +81,6 @@ func (i *infoServer) CollectEvent(ctx context.Context, req *infopkg.CollectEvent
 	return &infopkg.CollectEventResponse{}, nil
 }
 
-func NewInfoServer(managedNamespace string, links []*wfv1.Link, columns []*wfv1.Column, navColor string) infopkg.InfoServiceServer {
-	return &infoServer{managedNamespace, links, columns, navColor}
+func NewInfoServer(managedNamespaces []string, links []*wfv1.Link, columns []*wfv1.Column, navColor string) infopkg.InfoServiceServer {
+	return &infoServer{managedNamespaces, links, columns, navColor}
 }

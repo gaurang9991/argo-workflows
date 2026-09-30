@@ -663,10 +663,9 @@ func getWorkflowServer(t *testing.T) (workflowpkg.WorkflowServiceServer, context
 	if err = wfStore.Add(&wfObj5); err != nil {
 		panic(err)
 	}
-	namespaceAll := metav1.NamespaceAll
 	wftmplStore := workflowtemplate.NewClientStore()
 	cwftmplStore := clusterworkflowtemplate.NewClientStore()
-	server := NewServer(ctx, instanceIDSvc, offloadNodeStatusRepo, archivedRepo, wfClientset, wfStore, wfStore, wftmplStore, cwftmplStore, nil, &namespaceAll, nil)
+	server := NewServer(ctx, instanceIDSvc, offloadNodeStatusRepo, archivedRepo, wfClientset, wfStore, wfStore, wftmplStore, cwftmplStore, nil, []string{metav1.NamespaceAll}, nil)
 	return server, ctx
 }
 
@@ -1531,8 +1530,7 @@ func getWorkflowServerWithArtifacts(t *testing.T, template runtime.Object, defau
 		artifactRepos = armocks.DummyArtifactRepositories(defaultRepo)
 	}
 
-	namespaceAll := metav1.NamespaceAll
-	server := NewServer(ctx, instanceid.NewService("my-instanceid"), offloadNodeStatusRepo, archivedRepo, wfClientset, wfStore, wfStore, wftmplStore, cwftmplStore, nil, &namespaceAll, artifactRepos)
+	server := NewServer(ctx, instanceid.NewService("my-instanceid"), offloadNodeStatusRepo, archivedRepo, wfClientset, wfStore, wfStore, wftmplStore, cwftmplStore, nil, []string{metav1.NamespaceAll}, artifactRepos)
 
 	return server, ctx
 }

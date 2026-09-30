@@ -10107,7 +10107,15 @@
           }
         },
         "managedNamespace": {
+          "description": "managedNamespace is deprecated in favor of managedNamespaces, and is only set when there is\nexactly one managed namespace (empty for cluster-wide or multiple managed namespaces).",
           "type": "string"
+        },
+        "managedNamespaces": {
+          "description": "managedNamespaces is the static allowlist of namespaces this controller/server is scoped\nto, if any (empty means cluster-wide).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "modals": {
           "type": "object",

@@ -19,7 +19,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
-	"k8s.io/client-go/informers"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 
@@ -40,13 +39,13 @@ import (
 // Controller is a controller for cron workflows
 type Controller struct {
 	namespace            string
-	managedNamespace     string
+	managedNamespaces    []string
 	instanceID           string
 	cron                 *cronFacade
 	keyLock              sync.KeyLock
 	wfClientset          versioned.Interface
 	wfLister             util.WorkflowLister
-	cronWfInformer       informers.GenericInformer
+	cronWfInformer       cache.SharedIndexInformer
 	wftmplInformer       wfextvv1alpha1.WorkflowTemplateInformer
 	cwftmplInformer      wfextvv1alpha1.ClusterWorkflowTemplateInformer
 	wfDefaults           *v1alpha1.Workflow
@@ -71,7 +70,7 @@ func init() {
 }
 
 // NewCronController creates a new cron controller
-func NewCronController(ctx context.Context, wfclientset versioned.Interface, dynamicInterface dynamic.Interface, namespace string, managedNamespace string, instanceID string, metrics *metrics.Metrics,
+func NewCronController(ctx context.Context, wfclientset versioned.Interface, dynamicInterface dynamic.Interface, namespace string, managedNamespaces []string, instanceID string, metrics *metrics.Metrics,
 	eventRecorderManager events.EventRecorderManager, cronWorkflowWorkers int, wftmplInformer wfextvv1alpha1.WorkflowTemplateInformer, cwftmplInformer wfextvv1alpha1.ClusterWorkflowTemplateInformer, wfDefaults *v1alpha1.Workflow,
 ) *Controller {
 	ctx, logger := logging.RequireLoggerFromContext(ctx).WithField("component", "cron").InContext(ctx)
@@ -82,7 +81,7 @@ func NewCronController(ctx context.Context, wfclientset versioned.Interface, dyn
 	return &Controller{
 		wfClientset:          wfclientset,
 		namespace:            namespace,
-		managedNamespace:     managedNamespace,
+		managedNamespaces:    managedNamespaces,
 		instanceID:           instanceID,
 		cron:                 newCronFacade(),
 		keyLock:              sync.NewKeyLock(),
@@ -105,20 +104,25 @@ func (cc *Controller) Run(ctx context.Context) {
 	defer cc.cronWfQueue.ShutDown()
 	cc.logger.WithField("instanceID", cc.instanceID).Info(ctx, "Starting CronWorkflow controller")
 
-	cc.cronWfInformer = dynamicinformer.NewFilteredDynamicSharedInformerFactory(cc.dynamicInterface, cronWorkflowResyncPeriod, cc.managedNamespace, func(options *v1.ListOptions) {
-		cronWfInformerListOptionsFunc(options, cc.instanceID)
-	}).ForResource(schema.GroupVersionResource{Group: workflow.Group, Version: workflow.Version, Resource: workflow.CronWorkflowPlural})
-	//nolint:errcheck // the error only happens if the informer was already started, and it hasn't been
-	cc.cronWfInformer.Informer().SetTransform(informerutil.StripManagedFields)
+	cc.cronWfInformer = informerutil.NewMultiNamespaceIndexInformer(cc.managedNamespaces, func(ns string) cache.SharedIndexInformer {
+		delegate := dynamicinformer.NewFilteredDynamicSharedInformerFactory(cc.dynamicInterface, cronWorkflowResyncPeriod, ns, func(options *v1.ListOptions) {
+			cronWfInformerListOptionsFunc(options, cc.instanceID)
+		}).ForResource(schema.GroupVersionResource{Group: workflow.Group, Version: workflow.Version, Resource: workflow.CronWorkflowPlural})
+		//nolint:errcheck // the error only happens if the informer was already started, and it hasn't been
+		delegate.Informer().SetTransform(informerutil.StripManagedFields)
+		return delegate.Informer()
+	})
 	err := cc.addCronWorkflowInformerHandler(ctx)
 	if err != nil {
 		cc.logger.WithFatal().Error(ctx, err.Error())
 	}
 
-	wfInformer := util.NewWorkflowInformer(ctx, cc.dynamicInterface, cc.managedNamespace, cronWorkflowResyncPeriod,
-		func(options *v1.ListOptions) { wfInformerListOptionsFunc(options, cc.instanceID) },
-		func(options *v1.ListOptions) { wfInformerListOptionsFunc(options, cc.instanceID) },
-		cache.Indexers{})
+	wfInformer := informerutil.NewMultiNamespaceIndexInformer(cc.managedNamespaces, func(ns string) cache.SharedIndexInformer {
+		return util.NewWorkflowInformer(ctx, cc.dynamicInterface, ns, cronWorkflowResyncPeriod,
+			func(options *v1.ListOptions) { wfInformerListOptionsFunc(options, cc.instanceID) },
+			func(options *v1.ListOptions) { wfInformerListOptionsFunc(options, cc.instanceID) },
+			cache.Indexers{})
+	})
 	go wfInformer.Run(ctx.Done())
 
 	cc.wfLister = util.NewWorkflowLister(ctx, wfInformer)
@@ -126,7 +130,7 @@ func (cc *Controller) Run(ctx context.Context) {
 	cc.cron.Start()
 	defer cc.cron.Stop()
 
-	go cc.cronWfInformer.Informer().Run(ctx.Done())
+	go cc.cronWfInformer.Run(ctx.Done())
 
 	go wait.UntilWithContext(ctx, cc.syncAll, cc.syncPeriod)
 
@@ -157,7 +161,7 @@ func (cc *Controller) processNextCronItem(ctx context.Context) bool {
 	ctx, logger := cc.logger.WithField("cronWorkflow", key).InContext(ctx)
 	logger.Info(ctx, "Processing cron workflow")
 
-	obj, exists, err := cc.cronWfInformer.Informer().GetIndexer().GetByKey(key)
+	obj, exists, err := cc.cronWfInformer.GetIndexer().GetByKey(key)
 	if err != nil {
 		logger.WithError(err).Error(ctx, fmt.Sprintf("Failed to get CronWorkflow '%s' from informer index", key))
 		return true
@@ -217,7 +221,7 @@ func (cc *Controller) processNextCronItem(ctx context.Context) bool {
 }
 
 func (cc *Controller) addCronWorkflowInformerHandler(ctx context.Context) error {
-	_, err := cc.cronWfInformer.Informer().AddEventHandler(
+	_, err := cc.cronWfInformer.AddEventHandler(
 		cache.FilteringResourceEventHandler{
 			FilterFunc: func(obj any) bool {
 				un, ok := obj.(*unstructured.Unstructured)
@@ -273,7 +277,7 @@ func (cc *Controller) syncAll(ctx context.Context) {
 	}
 	groupedWorkflows := groupWorkflows(workflows)
 
-	cronWorkflows := cc.cronWfInformer.Informer().GetStore().List()
+	cronWorkflows := cc.cronWfInformer.GetStore().List()
 	for _, obj := range cronWorkflows {
 		un, ok := obj.(*unstructured.Unstructured)
 		if !ok {

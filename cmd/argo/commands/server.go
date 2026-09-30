@@ -45,8 +45,8 @@ func NewServerCommand() *cobra.Command {
 		secure                   bool
 		tlsCertificateSecretName string
 		hsts                     bool
-		namespaced               bool   // --namespaced
-		managedNamespace         string // --managed-namespace
+		namespaced               bool     // --namespaced
+		managedNamespace         []string // --managed-namespace
 		enableOpenBrowser        bool
 		eventOperationQueueSize  int
 		eventWorkerCount         int
@@ -94,17 +94,19 @@ See %s`, help.ArgoServer()),
 			ctx, cancel := context.WithCancel(ctx)
 			defer cancel()
 
-			if !namespaced && managedNamespace != "" {
+			if !namespaced && len(managedNamespace) > 0 {
 				logger.Warn(ctx, "ignoring --managed-namespace because --namespaced is false")
-				managedNamespace = ""
+				managedNamespace = nil
 			}
-			if namespaced && managedNamespace == "" {
-				managedNamespace = namespace
+			if namespaced && len(managedNamespace) == 0 {
+				managedNamespace = []string{namespace}
 			}
 
+			// For SSO RBAC-label delegation, which only supports a single namespace, use the
+			// first configured managed namespace.
 			ssoNamespace := namespace
-			if managedNamespace != "" {
-				ssoNamespace = managedNamespace
+			if len(managedNamespace) > 0 {
+				ssoNamespace = managedNamespace[0]
 			}
 
 			logger.WithFields(logging.Fields{
@@ -201,7 +203,7 @@ See %s`, help.ArgoServer()),
 	command.Flags().StringArrayVar(&authModes, "auth-mode", []string{"client"}, "API server authentication mode. Any 1 or more length permutation of: client,server,sso")
 	command.Flags().StringVar(&configMap, "configmap", common.ConfigMapName, "Name of K8s configmap to retrieve workflow controller configuration")
 	command.Flags().BoolVar(&namespaced, "namespaced", false, "run as namespaced mode")
-	command.Flags().StringVar(&managedNamespace, "managed-namespace", "", "namespace that watches, default to the installation namespace")
+	command.Flags().StringSliceVar(&managedNamespace, "managed-namespace", nil, "comma-separated list of namespaces that watches, default to the installation namespace")
 	command.Flags().BoolVarP(&enableOpenBrowser, "browser", "b", false, "enable automatic launching of the browser [local mode]")
 	command.Flags().IntVar(&eventOperationQueueSize, "event-operation-queue-size", 16, "how many events operations that can be queued at once")
 	command.Flags().IntVar(&eventWorkerCount, "event-worker-count", 4, "how many event workers to run")

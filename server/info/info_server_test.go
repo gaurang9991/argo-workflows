@@ -32,7 +32,7 @@ func Test_infoServer_GetUserInfo(t *testing.T) {
 func Test_infoServer_GetInfo(t *testing.T) {
 	t.Run("Ful Fields", func(t *testing.T) {
 		i := &infoServer{
-			managedNamespace: "argo",
+			managedNamespaces: []string{"argo"},
 			links: []*wfv1.Link{
 				{Name: "link-name", Scope: "scope", URL: "https://example.com"},
 			},
@@ -61,5 +61,17 @@ func Test_infoServer_GetInfo(t *testing.T) {
 		assert.Empty(t, info.Links)
 		assert.Empty(t, info.Columns)
 		assert.Empty(t, info.NavColor)
+	})
+
+	t.Run("Multiple managed namespaces", func(t *testing.T) {
+		i := &infoServer{managedNamespaces: []string{"team-a", "team-b", "team-c"}}
+		ctx := logging.TestContext(t.Context())
+		info, err := i.GetInfo(ctx, nil)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"team-a", "team-b", "team-c"}, info.ManagedNamespaces)
+		// the singular, deprecated field is only populated when there's exactly one managed
+		// namespace, so that older clients don't mistake a multi-namespace install for a
+		// single fixed namespace.
+		assert.Empty(t, info.ManagedNamespace)
 	})
 }

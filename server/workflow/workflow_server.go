@@ -32,6 +32,7 @@ import (
 	"github.com/argoproj/argo-workflows/v4/server/workflow/store"
 	argoutil "github.com/argoproj/argo-workflows/v4/util"
 	"github.com/argoproj/argo-workflows/v4/util/fields"
+	informerutil "github.com/argoproj/argo-workflows/v4/util/informer"
 	"github.com/argoproj/argo-workflows/v4/util/instanceid"
 	"github.com/argoproj/argo-workflows/v4/util/logging"
 	"github.com/argoproj/argo-workflows/v4/util/logs"
@@ -61,7 +62,7 @@ type workflowServer struct {
 	hydrator              hydrator.Interface
 	wfArchive             sqldb.WorkflowArchive
 	wfLister              store.WorkflowLister
-	wfReflector           *cache.Reflector
+	wfInformer            cache.SharedIndexInformer
 	wftmplStore           servertypes.WorkflowTemplateStore
 	cwftmplStore          servertypes.ClusterWorkflowTemplateStore
 	wfDefaults            *wfv1.Workflow
@@ -71,7 +72,7 @@ type workflowServer struct {
 var _ Server = &workflowServer{}
 
 // NewServer returns a new Server
-func NewServer(ctx context.Context, instanceIDService instanceid.Service, offloadNodeStatusRepo sqldb.OffloadNodeStatusRepo, wfArchive sqldb.WorkflowArchive, wfClientSet versioned.Interface, wfLister store.WorkflowLister, wfStore store.WorkflowStore, wftmplStore servertypes.WorkflowTemplateStore, cwftmplStore servertypes.ClusterWorkflowTemplateStore, wfDefaults *wfv1.Workflow, namespace *string, artifactRepositories artifactrepositories.Interface) Server {
+func NewServer(ctx context.Context, instanceIDService instanceid.Service, offloadNodeStatusRepo sqldb.OffloadNodeStatusRepo, wfArchive sqldb.WorkflowArchive, wfClientSet versioned.Interface, wfLister store.WorkflowLister, wfStore store.WorkflowStore, wftmplStore servertypes.WorkflowTemplateStore, cwftmplStore servertypes.ClusterWorkflowTemplateStore, wfDefaults *wfv1.Workflow, namespaces []string, artifactRepositories artifactrepositories.Interface) Server {
 	ws := &workflowServer{
 		instanceIDService:     instanceIDService,
 		offloadNodeStatusRepo: offloadNodeStatusRepo,
@@ -83,24 +84,46 @@ func NewServer(ctx context.Context, instanceIDService instanceid.Service, offloa
 		wfDefaults:            wfDefaults,
 		artifactRepositories:  artifactRepositories,
 	}
-	if wfStore != nil && namespace != nil {
-		lw := &cache.ListWatch{
-			ListWithContextFunc: func(ctx context.Context, options metav1.ListOptions) (runtime.Object, error) {
-				return wfClientSet.ArgoprojV1alpha1().Workflows(*namespace).List(ctx, options)
+	if wfStore != nil && len(namespaces) > 0 {
+		// One real informer per namespace (each with its own Reflector) feeding a shared
+		// handler that upserts/deletes individual workflows into wfStore. Using a single
+		// cache.Reflector per namespace directly against wfStore would be unsafe: every
+		// namespace's periodic relist calls Store.Replace, which wipes the *entire* store,
+		// clobbering the other namespaces' entries.
+		informer := informerutil.NewMultiNamespaceIndexInformer(namespaces, func(ns string) cache.SharedIndexInformer {
+			lw := &cache.ListWatch{
+				ListWithContextFunc: func(ctx context.Context, options metav1.ListOptions) (runtime.Object, error) {
+					return wfClientSet.ArgoprojV1alpha1().Workflows(ns).List(ctx, options)
+				},
+				WatchFuncWithContext: func(ctx context.Context, options metav1.ListOptions) (watch.Interface, error) {
+					return wfClientSet.ArgoprojV1alpha1().Workflows(ns).Watch(ctx, options)
+				},
+			}
+			return cache.NewSharedIndexInformer(cache.ToListWatcherWithWatchListSemantics(lw, wfClientSet), &wfv1.Workflow{}, reSyncDuration, cache.Indexers{})
+		})
+		//nolint:errcheck // the error only happens if the informer was stopped, and it hasn't even started
+		informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+			AddFunc: func(obj any) {
+				_ = wfStore.Add(obj)
 			},
-			WatchFuncWithContext: func(ctx context.Context, options metav1.ListOptions) (watch.Interface, error) {
-				return wfClientSet.ArgoprojV1alpha1().Workflows(*namespace).Watch(ctx, options)
+			UpdateFunc: func(_, obj any) {
+				_ = wfStore.Update(obj)
 			},
-		}
-		wfReflector := cache.NewReflector(lw, &wfv1.Workflow{}, wfStore, reSyncDuration)
-		ws.wfReflector = wfReflector
+			DeleteFunc: func(obj any) {
+				if tomb, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+					obj = tomb.Obj
+				}
+				_ = wfStore.Delete(obj)
+			},
+		})
+		ws.wfInformer = informer
 	}
 	return ws
 }
 
 func (s *workflowServer) Run(stopCh <-chan struct{}) {
-	if s.wfReflector != nil {
-		s.wfReflector.Run(stopCh)
+	if s.wfInformer != nil {
+		go s.wfInformer.Run(stopCh)
 	}
 }
 
@@ -258,8 +281,8 @@ func (s *workflowServer) ListWorkflows(ctx context.Context, req *workflowpkg.Wor
 		wfs = append(wfs, archivedWfList...)
 	}
 	meta := metav1.ListMeta{ResourceVersion: liveWfList.ResourceVersion}
-	if s.wfReflector != nil {
-		meta.ResourceVersion = s.wfReflector.LastSyncResourceVersion()
+	if s.wfInformer != nil {
+		meta.ResourceVersion = s.wfInformer.LastSyncResourceVersion()
 	}
 	var remainCount int64
 	if options.ShowRemainingItemCount {

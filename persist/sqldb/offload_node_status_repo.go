@@ -27,7 +27,7 @@ type OffloadNodeStatusRepo interface {
 	Save(ctx context.Context, uid, namespace string, nodes wfv1.Nodes) (string, error)
 	Get(ctx context.Context, uid, version string) (wfv1.Nodes, error)
 	List(ctx context.Context, namespace string) (map[UUIDVersion]wfv1.Nodes, error)
-	ListOldOffloads(ctx context.Context, namespace string) (map[string][]string, error)
+	ListOldOffloads(ctx context.Context, namespaces []string) (map[string][]string, error)
 	Delete(ctx context.Context, uid, version string) error
 	IsEnabled() bool
 }
@@ -181,8 +181,8 @@ func (wdc *nodeOffloadRepo) List(ctx context.Context, namespace string) (map[UUI
 	return res, nil
 }
 
-func (wdc *nodeOffloadRepo) ListOldOffloads(ctx context.Context, namespace string) (map[string][]string, error) {
-	wdc.log.WithFields(logging.Fields{"namespace": namespace}).Debug(ctx, "Listing old offloaded nodes")
+func (wdc *nodeOffloadRepo) ListOldOffloads(ctx context.Context, namespaces []string) (map[string][]string, error) {
+	wdc.log.WithFields(logging.Fields{"namespaces": namespaces}).Debug(ctx, "Listing old offloaded nodes")
 	var x map[string][]string
 	err := wdc.sessionProxy.With(ctx, func(s db.Session) error {
 		var records []UUIDVersion
@@ -190,7 +190,7 @@ func (wdc *nodeOffloadRepo) ListOldOffloads(ctx context.Context, namespace strin
 			Select("uid", "version").
 			From(wdc.tableName).
 			Where(db.Cond{"clustername": wdc.clusterName}).
-			And(namespaceEqual(namespace)).
+			And(namespaceIn(namespaces)).
 			And(wdc.oldOffload()).
 			All(&records)
 		if err != nil {

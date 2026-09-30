@@ -119,7 +119,7 @@ func TestServer_GetWFClient(t *testing.T) {
 			},
 		},
 	)
-	resourceCache := cache.NewResourceCache(kubeClient, corev1.NamespaceAll)
+	resourceCache := cache.NewResourceCache(kubeClient, nil)
 	ctx := logging.TestContext(t.Context())
 	resourceCache.Run(ctx.Done())
 	var clientForAuthorization ClientForAuthorization = func(authorization string, config *rest.Config) (*rest.Config, *servertypes.Clients, error) {

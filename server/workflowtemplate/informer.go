@@ -22,11 +22,11 @@ const (
 var _ types.WorkflowTemplateStore = &Informer{}
 
 type Informer struct {
-	managedNamespace string
-	informer         wfextvv1alpha1.WorkflowTemplateInformer
+	managedNamespaces []string
+	informer          wfextvv1alpha1.WorkflowTemplateInformer
 }
 
-func NewInformer(restConfig *rest.Config, managedNamespace string) (*Informer, error) {
+func NewInformer(restConfig *rest.Config, managedNamespaces []string) (*Informer, error) {
 	dynamicInterface, err := dynamic.NewForConfig(restConfig)
 	if err != nil {
 		return nil, err
@@ -34,10 +34,10 @@ func NewInformer(restConfig *rest.Config, managedNamespace string) (*Informer, e
 	informer := informer.NewTolerantWorkflowTemplateInformer(
 		dynamicInterface,
 		workflowTemplateResyncPeriod,
-		managedNamespace)
+		managedNamespaces)
 	return &Informer{
-		informer:         informer,
-		managedNamespace: managedNamespace,
+		informer:          informer,
+		managedNamespaces: managedNamespaces,
 	}, nil
 }
 
@@ -53,13 +53,15 @@ func (wti *Informer) Run(ctx context.Context, stopCh <-chan struct{}) {
 	}
 }
 
-// Getter returns a WorkflowTemplateNamespacedGetter. If namespace is empty, the Lister will use the namespace provided during initialization.
+// Getter returns a WorkflowTemplateNamespacedGetter. If namespace is empty, the Lister will use
+// the first configured managed namespace (relevant when there's exactly one; with several
+// managed namespaces callers are expected to always pass one explicitly).
 func (wti *Informer) Getter(ctx context.Context, namespace string) templateresolution.WorkflowTemplateNamespacedGetter {
 	if wti.informer == nil {
 		logging.RequireLoggerFromContext(ctx).WithFatal().Error(ctx, "Template informer not started")
 	}
-	if namespace == "" {
-		namespace = wti.managedNamespace
+	if namespace == "" && len(wti.managedNamespaces) > 0 {
+		namespace = wti.managedNamespaces[0]
 	}
 	return templateresolution.WrapWorkflowTemplateLister(wti.informer.Lister().WorkflowTemplates(namespace))
 }

@@ -70,7 +70,7 @@ func (wfc *WorkflowController) updateConfig(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
-			wfc.wfArchive = persist.NewWorkflowArchive(wfc.sessionProxy, persistence.GetClusterName(), wfc.managedNamespace, instanceIDService)
+			wfc.wfArchive = persist.NewWorkflowArchive(wfc.sessionProxy, persistence.GetClusterName(), wfc.GetManagedNamespaces(), instanceIDService)
 			logger.Info(ctx, "Workflow archiving is enabled")
 		} else {
 			logger.Info(ctx, "Workflow archiving is disabled")
@@ -86,7 +86,7 @@ func (wfc *WorkflowController) updateConfig(ctx context.Context) error {
 
 	logger.WithField("executorImage", wfc.executorImage()).
 		WithField("executorImagePullPolicy", wfc.executorImagePullPolicy()).
-		WithField("managedNamespace", wfc.GetManagedNamespace()).
+		WithField("managedNamespaces", wfc.GetManagedNamespaces()).
 		WithField("initlessPod", wfc.isInitlessPodEnabled()).
 		Info(ctx, "")
 	return nil

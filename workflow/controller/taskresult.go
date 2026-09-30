@@ -35,23 +35,25 @@ func (wfc *WorkflowController) newWorkflowTaskResultInformer(ctx context.Context
 
 	// This is a generated function, so we can't change the context.
 	//nolint:contextcheck
-	informer := wfextvv1alpha1.NewFilteredWorkflowTaskResultInformer(
-		wfc.wfclientset,
-		wfc.GetManagedNamespace(),
-		20*time.Minute,
-		cache.Indexers{
-			indexes.WorkflowIndex: indexes.MetaWorkflowIndexFunc,
-		},
-		func(options *metav1.ListOptions) {
-			options.LabelSelector = labelSelector
-			// `ResourceVersion=0` does not honor the `limit` in API calls, which results in making significant List calls
-			// without `limit`. For details, see https://github.com/argoproj/argo-workflows/pull/11343
-			// Check if ResourceVersion is "0" and reset it to empty string to avoid missing watch event.
-			if options.ResourceVersion == "0" {
-				options.ResourceVersion = ""
-			}
-		},
-	)
+	informer := informerutil.NewMultiNamespaceIndexInformer(wfc.GetManagedNamespaces(), func(ns string) cache.SharedIndexInformer {
+		return wfextvv1alpha1.NewFilteredWorkflowTaskResultInformer(
+			wfc.wfclientset,
+			ns,
+			20*time.Minute,
+			cache.Indexers{
+				indexes.WorkflowIndex: indexes.MetaWorkflowIndexFunc,
+			},
+			func(options *metav1.ListOptions) {
+				options.LabelSelector = labelSelector
+				// `ResourceVersion=0` does not honor the `limit` in API calls, which results in making significant List calls
+				// without `limit`. For details, see https://github.com/argoproj/argo-workflows/pull/11343
+				// Check if ResourceVersion is "0" and reset it to empty string to avoid missing watch event.
+				if options.ResourceVersion == "0" {
+					options.ResourceVersion = ""
+				}
+			},
+		)
+	})
 	//nolint:errcheck // the error only happens if the informer was already started, and it hasn't been
 	informer.SetTransform(informerutil.StripManagedFields)
 	//nolint:errcheck // the error only happens if the informer was stopped, and it hasn't even started (https://github.com/kubernetes/client-go/blob/46588f2726fa3e25b1704d6418190f424f95a990/tools/cache/shared_informer.go#L580)

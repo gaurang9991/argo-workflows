@@ -35,4 +35,12 @@ func Test_parseConfigMap(t *testing.T) {
 		err := parseConfigMap(&apiv1.ConfigMap{Data: map[string]string{"garbage": "garbage"}}, c)
 		require.Error(t, err)
 	})
+	t.Run("ManagedNamespaces", func(t *testing.T) {
+		c := &Config{}
+		err := parseConfigMap(&apiv1.ConfigMap{Data: map[string]string{"managedNamespaces": `    - team-a
+    - team-b
+    - team-c`}}, c)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"team-a", "team-b", "team-c"}, c.ManagedNamespaces)
+	})
 }

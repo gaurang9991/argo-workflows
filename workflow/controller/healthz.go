@@ -46,9 +46,11 @@ func (wfc *WorkflowController) Healthz(w http.ResponseWriter, r *http.Request) {
 			return nil
 		}
 
-		// establish a list of unreconciled workflows
+		// establish a list of unreconciled workflows. The indexer only ever contains workflows
+		// from the namespace(s) this controller watches, so "" here means "everything in scope",
+		// not literally every namespace in the cluster.
 		unreconciledWorkflows := make(map[string]*wfv1.Workflow)
-		err = cache.ListAllByNamespace(wfc.wfInformer.GetIndexer(), wfc.managedNamespace, selector, func(m any) {
+		err = cache.ListAllByNamespace(wfc.wfInformer.GetIndexer(), "", selector, func(m any) {
 			// Informer holds Workflows as type *Unstructured
 			un := m.(*unstructured.Unstructured)
 			// verify it's of type *Workflow (if not, it's an incorrectly formatted Workflow spec)
@@ -102,10 +104,10 @@ func (wfc *WorkflowController) Healthz(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		logger.WithError(err).
 			WithFields(logging.Fields{
-				"managedNamespace": wfc.managedNamespace,
-				"instanceID":       instanceID,
-				"labelSelector":    labelSelector,
-				"age":              wfc.healthzAge,
+				"managedNamespaces": wfc.GetManagedNamespaces(),
+				"instanceID":        instanceID,
+				"labelSelector":     labelSelector,
+				"age":               wfc.healthzAge,
 			}).
 			Info(r.Context(), "healthz")
 		w.WriteHeader(http.StatusInternalServerError)

@@ -76,6 +76,13 @@ Can be expressed as:
 ARGO_MANAGED_NAMESPACE=argo workflow-controller
 ```
 
+`--managed-namespace`/`ARGO_MANAGED_NAMESPACE` also accepts a comma-separated list to watch several
+namespaces (see [managed namespace](managed-namespace.md#multiple-managed-namespaces)):
+
+```bash
+ARGO_MANAGED_NAMESPACE=team-a,team-b,team-c workflow-controller --namespaced
+```
+
 You can set environment variables for the Controller Deployment's container spec like the following:
 
 ```yaml

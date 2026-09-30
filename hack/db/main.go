@@ -79,7 +79,7 @@ func NewFakeDataCommand() *cobra.Command {
 				cluster := clusters[rand.Intn(len(clusters))]
 				dbConfig := dbConfigFromType(dbType)
 				proxy := sqldb.NewSessionProxyFromSession(session, dbConfig, "", "")
-				wfArchive := persistsqldb.NewWorkflowArchive(proxy, cluster, "", instanceIDService)
+				wfArchive := persistsqldb.NewWorkflowArchive(proxy, cluster, nil, instanceIDService)
 				if err := wfArchive.ArchiveWorkflow(ctx, wf); err != nil {
 					return err
 				}

@@ -10,12 +10,17 @@ option go_package = "github.com/argoproj/argo-workflows/v4/pkg/apiclient/info";
 message GetInfoRequest {}
 
 message InfoResponse {
+  // managedNamespace is deprecated in favor of managedNamespaces, and is only set when there is
+  // exactly one managed namespace (empty for cluster-wide or multiple managed namespaces).
   string managedNamespace = 1;
   repeated github.com.argoproj.argo_workflows.v4.pkg.apis.workflow.v1alpha1.Link links = 2;
   // which modals to show
   map<string, bool> modals = 3;
   string navColor = 4;
   repeated github.com.argoproj.argo_workflows.v4.pkg.apis.workflow.v1alpha1.Column columns = 5;
+  // managedNamespaces is the static allowlist of namespaces this controller/server is scoped
+  // to, if any (empty means cluster-wide).
+  repeated string managedNamespaces = 6;
 }
 
 message GetVersionRequest {}
