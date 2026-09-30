@@ -6,11 +6,11 @@ import (
 	"net/http"
 	"time"
 
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/tools/cache"
 
 	wfv1 "github.com/argoproj/argo-workflows/v4/pkg/apis/workflow/v1alpha1"
+	"github.com/argoproj/argo-workflows/v4/util/compress"
 	"github.com/argoproj/argo-workflows/v4/util/logging"
 	"github.com/argoproj/argo-workflows/v4/workflow/common"
 	"github.com/argoproj/argo-workflows/v4/workflow/util"
@@ -49,8 +49,12 @@ func (wfc *WorkflowController) Healthz(w http.ResponseWriter, r *http.Request) {
 		// establish a list of unreconciled workflows
 		unreconciledWorkflows := make(map[string]*wfv1.Workflow)
 		err = cache.ListAllByNamespace(wfc.wfInformer.GetIndexer(), wfc.managedNamespace, selector, func(m any) {
-			// Informer holds Workflows as type *Unstructured
-			un := m.(*unstructured.Unstructured)
+			// Informer holds Workflows compressed; decompress before converting.
+			un, unErr := compress.ToUnstructured(m)
+			if unErr != nil {
+				logger.WithError(unErr).Warn(ctx, "Healthz check found an object that could not be decompressed")
+				return
+			}
 			// verify it's of type *Workflow (if not, it's an incorrectly formatted Workflow spec)
 			wf, convErr := util.FromUnstructured(un)
 			if convErr != nil {

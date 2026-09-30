@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/tools/cache"
 
 	"github.com/argoproj/argo-workflows/v4/persist/sqldb"
 	wfv1 "github.com/argoproj/argo-workflows/v4/pkg/apis/workflow/v1alpha1"
+	"github.com/argoproj/argo-workflows/v4/util/compress"
 	"github.com/argoproj/argo-workflows/v4/util/env"
 	"github.com/argoproj/argo-workflows/v4/workflow/common"
 	"github.com/argoproj/argo-workflows/v4/workflow/controller/indexes"
@@ -54,22 +56,26 @@ func (f *estimatorFactory) NewEstimator(ctx context.Context, wf *wfv1.Workflow) 
 			if err != nil {
 				return defaultEstimator, fmt.Errorf("failed to list workflows by index: %w", err)
 			}
-			var newestUn *unstructured.Unstructured
+			var newestUn metav1.Object
 			for _, obj := range objs {
-				un, ok := obj.(*unstructured.Unstructured)
-				if !ok {
+				m, err := meta.Accessor(obj)
+				if err != nil {
 					return defaultEstimator, fmt.Errorf("failed convert object to unstructured")
 				}
-				if un.GetLabels()[common.LabelKeyPhase] != string(wfv1.NodeSucceeded) {
+				if m.GetLabels()[common.LabelKeyPhase] != string(wfv1.NodeSucceeded) {
 					continue
 				}
 				// we use `creationTimestamp` because it's fast
-				if newestUn == nil || un.GetCreationTimestamp().After(newestUn.GetCreationTimestamp().Time) {
-					newestUn = un
+				if newestUn == nil || m.GetCreationTimestamp().After(newestUn.GetCreationTimestamp().Time) {
+					newestUn = m
 				}
 			}
 			if newestUn != nil {
-				newestWf, convErr := util.FromUnstructured(newestUn)
+				un, convErr := compress.ToUnstructured(newestUn)
+				if convErr != nil {
+					return defaultEstimator, fmt.Errorf("failed convert unstructured to workflow: %w", convErr)
+				}
+				newestWf, convErr := util.FromUnstructured(un)
 				if convErr != nil {
 					return defaultEstimator, fmt.Errorf("failed convert unstructured to workflow: %w", convErr)
 				}

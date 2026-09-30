@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/api/meta"
 
 	"github.com/argoproj/argo-workflows/v4/pkg/apis/workflow"
 )
@@ -303,8 +303,8 @@ var AnnotationKeyKillCmd = func(containerName string) string { return workflow.W
 var GlobalVarValidWorkflowVariablePrefix = []string{"item.", "steps.", "inputs.", "outputs.", "pod.", "workflow.", "tasks."}
 
 func UnstructuredHasCompletedLabel(obj any) bool {
-	if wf, ok := obj.(*unstructured.Unstructured); ok {
-		return wf.GetLabels()[LabelKeyCompleted] == "true"
+	if m, err := meta.Accessor(obj); err == nil {
+		return m.GetLabels()[LabelKeyCompleted] == "true"
 	}
 	return false
 }

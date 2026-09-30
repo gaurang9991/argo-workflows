@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	apiv1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
@@ -349,10 +349,12 @@ func GenerateOnExitNodeName(parentNodeName string) string {
 	return fmt.Sprintf("%s.onExit", parentNodeName)
 }
 
-func IsDone(un *unstructured.Unstructured) bool {
-	return un.GetDeletionTimestamp() == nil &&
-		un.GetLabels()[LabelKeyCompleted] == "true" &&
-		un.GetLabels()[LabelKeyWorkflowArchivingStatus] != "Pending"
+// IsDone takes any metav1.Object (e.g. an *unstructured.Unstructured or a
+// compressed informer cache entry) since it only ever looks at metadata.
+func IsDone(obj metav1.Object) bool {
+	return obj.GetDeletionTimestamp() == nil &&
+		obj.GetLabels()[LabelKeyCompleted] == "true" &&
+		obj.GetLabels()[LabelKeyWorkflowArchivingStatus] != "Pending"
 }
 
 // CheckAllHooksFullfilled checks whether child hooked nodes are fulfilled.

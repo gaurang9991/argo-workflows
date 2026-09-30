@@ -24,7 +24,7 @@ metadata:
 	now := time.Now()
 	wf.SetCreationTimestamp(v1.Time{Time: now})
 	queue := &gcHeap{
-		heap:  []*unstructured.Unstructured{wf},
+		heap:  []v1.Object{wf},
 		dedup: make(map[string]bool),
 	}
 	heap.Init(queue)
@@ -70,7 +70,7 @@ metadata:
 	now := time.Now()
 	wf.SetCreationTimestamp(v1.Time{Time: now})
 	queue := &gcHeap{
-		heap:  []*unstructured.Unstructured{},
+		heap:  []v1.Object{},
 		dedup: make(map[string]bool),
 	}
 	heap.Push(queue, wf)

@@ -4,7 +4,23 @@ package informer
 
 import (
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/client-go/tools/cache"
 )
+
+// Chain composes several cache.TransformFunc into one, applying them in
+// order. Use it to apply, e.g., both StripManagedFields and compress.Transform
+// via a single call to SharedIndexInformer.SetTransform.
+func Chain(fns ...cache.TransformFunc) cache.TransformFunc {
+	return func(i any) (any, error) {
+		var err error
+		for _, fn := range fns {
+			if i, err = fn(i); err != nil {
+				return nil, err
+			}
+		}
+		return i, nil
+	}
+}
 
 // StripManagedFields is a cache.TransformFunc that removes
 // metadata.managedFields before objects enter an informer cache.

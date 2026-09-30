@@ -1,7 +1,7 @@
 package gccontroller
 
 import (
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // Heap is the interface for a GC heap (implements heap.Interface)
@@ -14,13 +14,13 @@ type Heap interface {
 }
 
 type gcHeap struct {
-	heap  []*unstructured.Unstructured
+	heap  []metav1.Object
 	dedup map[string]bool
 }
 
 func NewHeap() Heap {
 	return &gcHeap{
-		heap:  make([]*unstructured.Unstructured, 0),
+		heap:  make([]metav1.Object, 0),
 		dedup: make(map[string]bool),
 	}
 }
@@ -32,11 +32,12 @@ func (h *gcHeap) Less(i, j int) bool {
 func (h *gcHeap) Swap(i, j int) { h.heap[i], h.heap[j] = h.heap[j], h.heap[i] }
 
 func (h *gcHeap) Push(x any) {
-	if _, ok := h.dedup[x.(*unstructured.Unstructured).GetName()]; ok {
+	m := x.(metav1.Object)
+	if _, ok := h.dedup[m.GetName()]; ok {
 		return
 	}
-	h.dedup[x.(*unstructured.Unstructured).GetName()] = true
-	h.heap = append(h.heap, x.(*unstructured.Unstructured))
+	h.dedup[m.GetName()] = true
+	h.heap = append(h.heap, m)
 }
 
 func (h *gcHeap) Pop() any {

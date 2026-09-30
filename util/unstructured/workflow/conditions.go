@@ -5,11 +5,15 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	wfv1 "github.com/argoproj/argo-workflows/v4/pkg/apis/workflow/v1alpha1"
+	"github.com/argoproj/argo-workflows/v4/util/compress"
 )
 
-// GetConditions returns the conditions, excluding the `message` field.
-func GetConditions(un *unstructured.Unstructured) wfv1.Conditions {
-	if un == nil {
+// GetConditions returns the conditions, excluding the `message` field. obj is
+// typically an *unstructured.Unstructured or a compressed informer cache
+// entry (*compress.Object); it is transparently decompressed as needed.
+func GetConditions(obj any) wfv1.Conditions {
+	un, err := compress.ToUnstructured(obj)
+	if err != nil || un == nil {
 		return nil
 	}
 	items, _, _ := unstructured.NestedSlice(un.Object, "status", "conditions")

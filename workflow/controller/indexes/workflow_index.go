@@ -2,9 +2,9 @@ package indexes
 
 import (
 	"k8s.io/apimachinery/pkg/api/meta"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/tools/cache"
 
+	"github.com/argoproj/argo-workflows/v4/util/compress"
 	"github.com/argoproj/argo-workflows/v4/workflow/common"
 	"github.com/argoproj/argo-workflows/v4/workflow/util"
 )
@@ -47,13 +47,17 @@ func WorkflowSemaphoreKeysIndexFunc(enabled bool) cache.IndexFunc {
 		}
 	}
 	return func(obj any) ([]string, error) {
-		un, ok := obj.(*unstructured.Unstructured)
-		if !ok {
+		m, err := meta.Accessor(obj)
+		if err != nil {
 			return nil, nil
 		}
-		completed, ok := un.GetLabels()[common.LabelKeyCompleted]
+		completed, ok := m.GetLabels()[common.LabelKeyCompleted]
 		if ok && completed != "false" {
 			return nil, nil
+		}
+		un, err := compress.ToUnstructured(obj)
+		if err != nil {
+			return nil, err
 		}
 		wf, err := util.FromUnstructured(un)
 		if err != nil {

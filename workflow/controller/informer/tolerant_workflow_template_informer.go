@@ -13,6 +13,7 @@ import (
 	"github.com/argoproj/argo-workflows/v4/pkg/apis/workflow"
 	extwfv1 "github.com/argoproj/argo-workflows/v4/pkg/client/informers/externalversions/workflow/v1alpha1"
 	"github.com/argoproj/argo-workflows/v4/pkg/client/listers/workflow/v1alpha1"
+	"github.com/argoproj/argo-workflows/v4/util/compress"
 	informerutil "github.com/argoproj/argo-workflows/v4/util/informer"
 )
 
@@ -31,7 +32,7 @@ func NewTolerantWorkflowTemplateInformer(dynamicInterface dynamic.Interface, def
 		}
 	}).ForResource(schema.GroupVersionResource{Group: workflow.Group, Version: workflow.Version, Resource: workflow.WorkflowTemplatePlural})
 	//nolint:errcheck // the error only happens if the informer was already started, and it hasn't been
-	delegate.Informer().SetTransform(informerutil.StripManagedFields)
+	delegate.Informer().SetTransform(informerutil.Chain(informerutil.StripManagedFields, compress.Transform))
 	return &tolerantWorkflowTemplateInformer{delegate: delegate}
 }
 

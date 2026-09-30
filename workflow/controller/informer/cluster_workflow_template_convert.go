@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"reflect"
 
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 
 	wfv1 "github.com/argoproj/argo-workflows/v4/pkg/apis/workflow/v1alpha1"
 	wfextvv1alpha1 "github.com/argoproj/argo-workflows/v4/pkg/client/informers/externalversions/workflow/v1alpha1"
+	"github.com/argoproj/argo-workflows/v4/util/compress"
 	"github.com/argoproj/argo-workflows/v4/workflow/templateresolution"
 	"github.com/argoproj/argo-workflows/v4/workflow/util"
 )
@@ -29,11 +29,11 @@ func objectsToClusterWorkflowTemplates(list []runtime.Object) []*wfv1.ClusterWor
 // this function always tries to return a value, even if it is badly formed
 func interfaceToClusterWorkflowTemplate(object any) (*wfv1.ClusterWorkflowTemplate, error) {
 	v := &wfv1.ClusterWorkflowTemplate{}
-	un, ok := object.(*unstructured.Unstructured)
-	if !ok {
-		return v, fmt.Errorf("malformed cluster workflow template: expected \"*unstructured.Unstructured\", got \"%s\"", reflect.TypeOf(object).String())
+	un, err := compress.ToUnstructured(object)
+	if err != nil {
+		return v, fmt.Errorf("malformed cluster workflow template: expected \"*unstructured.Unstructured\" or \"*compress.Object\", got \"%s\"", reflect.TypeOf(object).String())
 	}
-	err := util.FromUnstructuredObj(un, v)
+	err = util.FromUnstructuredObj(un, v)
 	if err != nil {
 		return v, fmt.Errorf("malformed cluster workflow template \"%s\": %w", un.GetName(), err)
 	}

@@ -9,7 +9,6 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/selection"
@@ -23,6 +22,7 @@ import (
 	argoConfig "github.com/argoproj/argo-workflows/v4/config"
 	"github.com/argoproj/argo-workflows/v4/pkg/apis/workflow"
 	wfv1 "github.com/argoproj/argo-workflows/v4/pkg/apis/workflow/v1alpha1"
+	"github.com/argoproj/argo-workflows/v4/util/compress"
 	"github.com/argoproj/argo-workflows/v4/util/diff"
 	informerutil "github.com/argoproj/argo-workflows/v4/util/informer"
 	"github.com/argoproj/argo-workflows/v4/util/logging"
@@ -158,8 +158,8 @@ func (c *Controller) podOrphaned(ctx context.Context, pod *apiv1.Pod) bool {
 	if !wfExists {
 		return true
 	}
-	un, ok := obj.(*unstructured.Unstructured)
-	if !ok {
+	un, err := compress.ToUnstructured(obj)
+	if err != nil {
 		log.Warn(ctx, "workflow is not an unstructured")
 		return true
 	}

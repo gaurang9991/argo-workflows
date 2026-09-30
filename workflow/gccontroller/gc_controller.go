@@ -8,8 +8,8 @@ import (
 	"time"
 
 	apierr "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	runtimeutil "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/tools/cache"
@@ -20,6 +20,7 @@ import (
 	wfv1 "github.com/argoproj/argo-workflows/v4/pkg/apis/workflow/v1alpha1"
 	wfclientset "github.com/argoproj/argo-workflows/v4/pkg/client/clientset/versioned"
 	commonutil "github.com/argoproj/argo-workflows/v4/util"
+	"github.com/argoproj/argo-workflows/v4/util/compress"
 	"github.com/argoproj/argo-workflows/v4/util/logging"
 	"github.com/argoproj/argo-workflows/v4/workflow/common"
 	"github.com/argoproj/argo-workflows/v4/workflow/metrics"
@@ -62,8 +63,8 @@ func NewController(ctx context.Context, wfClientset wfclientset.Interface, wfInf
 
 	_, err := wfInformer.AddEventHandler(cache.FilteringResourceEventHandler{
 		FilterFunc: func(obj any) bool {
-			un, ok := obj.(*unstructured.Unstructured)
-			return ok && common.IsDone(un)
+			m, err := meta.Accessor(obj)
+			return err == nil && common.IsDone(m)
 		},
 		Handler: cache.ResourceEventHandlerFuncs{
 			AddFunc: func(obj any) {
@@ -80,8 +81,8 @@ func NewController(ctx context.Context, wfClientset wfclientset.Interface, wfInf
 
 	_, err = wfInformer.AddEventHandler(cache.FilteringResourceEventHandler{
 		FilterFunc: func(obj any) bool {
-			un, ok := obj.(*unstructured.Unstructured)
-			return ok && common.IsDone(un)
+			m, err := meta.Accessor(obj)
+			return err == nil && common.IsDone(m)
 		},
 		Handler: cache.ResourceEventHandlerFuncs{
 			UpdateFunc: func(old, newObj any) {
@@ -104,16 +105,16 @@ func (c *Controller) retentionEnqueue(ctx context.Context, obj any) {
 		return
 	}
 
-	un, ok := obj.(*unstructured.Unstructured)
-	if !ok {
+	m, err := meta.Accessor(obj)
+	if err != nil {
 		c.log.WithField("obj", obj).Warn(ctx, "is not an unstructured")
 		return
 	}
 
-	switch phase := wfv1.WorkflowPhase(un.GetLabels()[common.LabelKeyPhase]); phase {
+	switch phase := wfv1.WorkflowPhase(m.GetLabels()[common.LabelKeyPhase]); phase {
 	case wfv1.WorkflowSucceeded, wfv1.WorkflowFailed, wfv1.WorkflowError:
 		c.orderedQueueLock.Lock()
-		heap.Push(c.orderedQueue[phase], un)
+		heap.Push(c.orderedQueue[phase], m)
 		c.runGC(ctx, phase)
 		c.orderedQueueLock.Unlock()
 	}
@@ -186,8 +187,8 @@ func (c *Controller) processNextWorkItem(ctx context.Context) bool {
 
 // enqueueWF conditionally queues a workflow to the ttl queue if it is within the deletion period
 func (c *Controller) enqueueWF(ctx context.Context, obj any) {
-	un, ok := obj.(*unstructured.Unstructured)
-	if !ok {
+	un, err := compress.ToUnstructured(obj)
+	if err != nil {
 		c.log.WithField("obj", obj).Warn(ctx, "is not an unstructured")
 		return
 	}
@@ -224,8 +225,8 @@ func (c *Controller) deleteWorkflow(ctx context.Context, key string) error {
 		return nil
 	}
 	if exists {
-		un, ok := obj.(*unstructured.Unstructured)
-		if ok && !common.IsDone(un) {
+		m, err := meta.Accessor(obj)
+		if err == nil && !common.IsDone(m) {
 			c.log.WithField("workflow", key).Info(ctx, "Workflow is not completed due to a retry operation, ignore deletion")
 			return nil
 		}

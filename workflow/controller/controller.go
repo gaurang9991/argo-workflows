@@ -44,6 +44,7 @@ import (
 	wfextvv1alpha1 "github.com/argoproj/argo-workflows/v4/pkg/client/informers/externalversions/workflow/v1alpha1"
 	"github.com/argoproj/argo-workflows/v4/pkg/plugins/spec"
 	authutil "github.com/argoproj/argo-workflows/v4/util/auth"
+	"github.com/argoproj/argo-workflows/v4/util/compress"
 	"github.com/argoproj/argo-workflows/v4/util/deprecation"
 	"github.com/argoproj/argo-workflows/v4/util/env"
 	"github.com/argoproj/argo-workflows/v4/util/errors"
@@ -738,13 +739,13 @@ func (wfc *WorkflowController) notifySemaphoreConfigUpdate(ctx context.Context, 
 	}
 
 	for _, obj := range wfs {
-		un, ok := obj.(*unstructured.Unstructured)
-		if !ok {
+		m, err := meta.Accessor(obj)
+		if err != nil {
 			logger.WithField("index", indexes.SemaphoreConfigIndexName).Warn(ctx, "received object from indexer is not an unstructured")
 			continue
 		}
-		logger.WithFields(logging.Fields{"namespace": un.GetNamespace(), "name": un.GetName()}).Info(ctx, "Adding workflow")
-		wfc.wfQueue.AddRateLimited(fmt.Sprintf("%s/%s", un.GetNamespace(), un.GetName()))
+		logger.WithFields(logging.Fields{"namespace": m.GetNamespace(), "name": m.GetName()}).Info(ctx, "Adding workflow")
+		wfc.wfQueue.AddRateLimited(fmt.Sprintf("%s/%s", m.GetNamespace(), m.GetName()))
 	}
 }
 
@@ -840,11 +841,11 @@ func (wfc *WorkflowController) deleteOffloadedNodesForWorkflow(ctx context.Conte
 	case 0:
 		logger.WithField("uid", uid).Info(ctx, "Workflow missing, probably deleted")
 	case 1:
-		un, ok := workflows[0].(*unstructured.Unstructured)
-		if !ok {
+		m, mErr := meta.Accessor(workflows[0])
+		if mErr != nil {
 			return fmt.Errorf("object %+v is not an unstructured", workflows[0])
 		}
-		key := un.GetNamespace() + "/" + un.GetName()
+		key := m.GetNamespace() + "/" + m.GetName()
 		wfc.workflowKeyLock.Lock(key)
 		defer wfc.workflowKeyLock.Unlock(key)
 
@@ -852,9 +853,9 @@ func (wfc *WorkflowController) deleteOffloadedNodesForWorkflow(ctx context.Conte
 		if !ok {
 			return fmt.Errorf("failed to get workflow by key after locking")
 		}
-		un, ok = obj.(*unstructured.Unstructured)
-		if !ok {
-			return fmt.Errorf("object %+v is not an unstructured", obj)
+		un, unErr := compress.ToUnstructured(obj)
+		if unErr != nil {
+			return fmt.Errorf("object %+v is not an unstructured: %w", obj, unErr)
 		}
 		wf, err = util.FromUnstructured(un)
 		if err != nil {
@@ -954,8 +955,8 @@ func (wfc *WorkflowController) processNextItem(ctx context.Context) bool {
 	logger := logging.RequireLoggerFromContext(ctx)
 	// The workflow informer receives unstructured objects to deal with the possibility of invalid
 	// workflow manifests that are unable to unmarshal to workflow objects
-	un, ok := obj.(*unstructured.Unstructured)
-	if !ok {
+	un, err := compress.ToUnstructured(obj)
+	if err != nil {
 		logger.WithField("key", key).Warn(ctx, "Index is not an unstructured")
 		return true
 	}
@@ -1071,8 +1072,8 @@ func (wfc *WorkflowController) processNextArchiveItem(ctx context.Context) bool 
 		wfc.wfArchiveQueue.Forget(key)
 		return true
 	}
-	un, ok := obj.(*unstructured.Unstructured)
-	if !ok {
+	m, mErr := meta.Accessor(obj)
+	if mErr != nil {
 		logger.WithField("key", key).Error(ctx, "Workflow from the informer is not unstructured")
 		wfc.wfArchiveQueue.Forget(key)
 		return true
@@ -1084,7 +1085,7 @@ func (wfc *WorkflowController) processNextArchiveItem(ctx context.Context) bool 
 	// by uid, so archiving an older snapshot does not merely repeat work, it
 	// replaces a newer archived record with an older one. Requeue rather than
 	// drop, so the archive still happens once the informer catches up.
-	if outdated, _ := wfc.isOutdated(ctx, un); outdated {
+	if outdated, _ := wfc.isOutdated(ctx, m); outdated {
 		logger.WithField("key", key).Debug(ctx, "Waiting for a current copy of the workflow before archiving")
 		wfc.wfArchiveQueue.AddRateLimited(key)
 		return true
@@ -1099,7 +1100,7 @@ func (wfc *WorkflowController) processNextArchiveItem(ctx context.Context) bool 
 	// common.IsDone is deliberately not used: it treats a Pending
 	// archiving-status as not-done, so it is false for precisely the workflows
 	// this queue exists to archive.
-	labels := un.GetLabels()
+	labels := m.GetLabels()
 	if labels[common.LabelKeyCompleted] != "true" ||
 		labels[common.LabelKeyWorkflowArchivingStatus] != "Pending" {
 		logger.WithField("key", key).Info(ctx, "Workflow is no longer pending archiving, skipping")
@@ -1170,8 +1171,8 @@ func (wfc *WorkflowController) tweakWatchRequestListOptions(options *metav1.List
 }
 
 func getWfPriority(obj any) (int32, time.Time) {
-	un, ok := obj.(*unstructured.Unstructured)
-	if !ok {
+	un, err := compress.ToUnstructured(obj)
+	if err != nil {
 		return 0, time.Now()
 	}
 	priority, hasPriority, err := unstructured.NestedInt64(un.Object, "spec", "priority")
@@ -1266,14 +1267,14 @@ func (wfc *WorkflowController) addWorkflowInformerHandlers(ctx context.Context) 
 			// the cache. When they are rejected (this returns false)
 			// they will be deleted.
 			FilterFunc: func(obj any) bool {
-				un, ok := obj.(*unstructured.Unstructured)
-				if !ok {
+				m, err := meta.Accessor(obj)
+				if err != nil {
 					logger.WithField("obj", obj).Warn(ctx, "Workflow FilterFunc: is not an unstructured")
 					return false
 				}
-				needed := reconciliationNeeded(un)
+				needed := reconciliationNeeded(m)
 				if !needed {
-					wfc.recordWorkflowCompleted(un)
+					wfc.recordWorkflowCompleted(m)
 				}
 				return needed
 			},
@@ -1292,7 +1293,11 @@ func (wfc *WorkflowController) addWorkflowInformerHandlers(ctx context.Context) 
 				// This function is called when an updated (we already know about this object)
 				// is to be updated in the informer
 				UpdateFunc: func(old, newObj any) {
-					oldWf, newWf := old.(*unstructured.Unstructured), newObj.(*unstructured.Unstructured)
+					oldWf, oldErr := meta.Accessor(old)
+					newWf, newErr := meta.Accessor(newObj)
+					if oldErr != nil || newErr != nil {
+						return
+					}
 					// this check is very important to prevent doing many reconciliations we do not need to do
 					if oldWf.GetResourceVersion() == newWf.GetResourceVersion() {
 						return
@@ -1309,11 +1314,16 @@ func (wfc *WorkflowController) addWorkflowInformerHandlers(ctx context.Context) 
 				DeleteFunc: func(obj any) {
 					// IndexerInformer uses a delta queue, therefore for deletes we have to use this
 					// key function.
+					m, mErr := meta.Accessor(obj)
+					if mErr != nil {
+						logger.WithField("obj", obj).Warn(ctx, "Workflow DeleteFunc: is not an unstructured")
+						return
+					}
 
 					// Remove finalizers from Pods if they exist before deletion
 					pods := wfc.kubeclientset.CoreV1().Pods(wfc.GetManagedNamespace())
 					podList, err := pods.List(ctx, metav1.ListOptions{
-						LabelSelector: fmt.Sprintf("%s=%s", common.LabelKeyWorkflow, obj.(*unstructured.Unstructured).GetName()),
+						LabelSelector: fmt.Sprintf("%s=%s", common.LabelKeyWorkflow, m.GetName()),
 					})
 					if err != nil {
 						logger.WithError(err).Error(ctx, "Failed to list pods")
@@ -1330,7 +1340,7 @@ func (wfc *WorkflowController) addWorkflowInformerHandlers(ctx context.Context) 
 						// no need to add to the queue - this workflow is done
 						wfc.throttler.Remove(key)
 					}
-					wfc.recordWorkflowCompleted(obj.(*unstructured.Unstructured))
+					wfc.recordWorkflowCompleted(m)
 				},
 			},
 		},
@@ -1340,8 +1350,8 @@ func (wfc *WorkflowController) addWorkflowInformerHandlers(ctx context.Context) 
 	}
 	_, err = wfc.wfInformer.AddEventHandler(cache.FilteringResourceEventHandler{
 		FilterFunc: func(obj any) bool {
-			un, ok := obj.(*unstructured.Unstructured)
-			if !ok {
+			m, err := meta.Accessor(obj)
+			if err != nil {
 				return false
 			}
 			// Require both labels rather than assuming completion from the
@@ -1349,7 +1359,7 @@ func (wfc *WorkflowController) addWorkflowInformerHandlers(ctx context.Context) 
 			// were set together, so a hand-applied Pending label would otherwise
 			// queue a running workflow for archiving. The completion path sets
 			// both in one update, so this excludes nothing legitimate.
-			labels := un.GetLabels()
+			labels := m.GetLabels()
 			return labels[common.LabelKeyCompleted] == "true" &&
 				labels[common.LabelKeyWorkflowArchivingStatus] == "Pending"
 		},
@@ -1373,15 +1383,11 @@ func (wfc *WorkflowController) addWorkflowInformerHandlers(ctx context.Context) 
 	}
 	_, err = wfc.wfInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		DeleteFunc: func(obj any) {
-			var wf *unstructured.Unstructured
-			switch x := obj.(type) {
-			case *unstructured.Unstructured:
-				wf = x
-			case cache.DeletedFinalStateUnknown:
-				wf, _ = x.Obj.(*unstructured.Unstructured)
+			if d, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+				obj = d.Obj
 			}
-			if wf != nil {
-				wfc.metrics.DeleteRealtimeMetricsForWfUID(string(wf.GetUID()))
+			if m, err := meta.Accessor(obj); err == nil {
+				wfc.metrics.DeleteRealtimeMetricsForWfUID(string(m.GetUID()))
 			}
 		},
 	})
@@ -1392,8 +1398,8 @@ func (wfc *WorkflowController) addWorkflowInformerHandlers(ctx context.Context) 
 }
 
 func (wfc *WorkflowController) archiveWorkflowAux(ctx context.Context, obj any) error {
-	un, ok := obj.(*unstructured.Unstructured)
-	if !ok {
+	un, err := compress.ToUnstructured(obj)
+	if err != nil {
 		return nil
 	}
 	wf, err := util.FromUnstructured(un)
@@ -1568,9 +1574,9 @@ func (wfc *WorkflowController) getMetricsServerConfig() *telemetry.MetricsConfig
 }
 
 func (wfc *WorkflowController) releaseAllWorkflowLocks(ctx context.Context, obj any) {
-	un, ok := obj.(*unstructured.Unstructured)
 	logger := logging.RequireLoggerFromContext(ctx)
-	if !ok {
+	un, err := compress.ToUnstructured(obj)
+	if err != nil {
 		logger.WithField("key", obj).Warn(ctx, "Key in index is not an unstructured")
 		return
 	}

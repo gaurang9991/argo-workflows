@@ -15,7 +15,7 @@ import (
 func Test_objectToWorkflowTemplate(t *testing.T) {
 	t.Run("NotUnstructured", func(t *testing.T) {
 		v, err := objectToWorkflowTemplate(&corev1.Status{})
-		require.EqualError(t, err, "malformed workflow template: expected \"*unstructured.Unstructured\", got \"*v1.Status\"")
+		require.EqualError(t, err, "malformed workflow template: expected \"*unstructured.Unstructured\" or \"*compress.Object\", got \"*v1.Status\"")
 		assert.NotNil(t, v)
 	})
 	t.Run("MalformedWorkflowTemplate", func(t *testing.T) {

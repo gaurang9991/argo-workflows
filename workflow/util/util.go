@@ -44,6 +44,7 @@ import (
 	wfclientset "github.com/argoproj/argo-workflows/v4/pkg/client/clientset/versioned"
 	"github.com/argoproj/argo-workflows/v4/pkg/client/clientset/versioned/typed/workflow/v1alpha1"
 	cmdutil "github.com/argoproj/argo-workflows/v4/util/cmd"
+	"github.com/argoproj/argo-workflows/v4/util/compress"
 	errorsutil "github.com/argoproj/argo-workflows/v4/util/errors"
 	informerutil "github.com/argoproj/argo-workflows/v4/util/informer"
 	"github.com/argoproj/argo-workflows/v4/util/logging"
@@ -80,7 +81,7 @@ func NewWorkflowInformer(ctx context.Context, dclient dynamic.Interface, ns stri
 		tweakWatchRequestListOptions,
 	)
 	//nolint:errcheck // the error only happens if the informer was already started, and it hasn't been
-	informer.SetTransform(informerutil.StripManagedFields)
+	informer.SetTransform(informerutil.Chain(informerutil.StripManagedFields, compress.Transform))
 	return informer
 }
 
@@ -113,7 +114,12 @@ type workflowLister struct {
 func (l *workflowLister) List() ([]*wfv1.Workflow, error) {
 	workflows := make([]*wfv1.Workflow, 0)
 	for _, m := range l.informer.GetStore().List() {
-		wf, err := FromUnstructured(m.(*unstructured.Unstructured))
+		un, err := compress.ToUnstructured(m)
+		if err != nil {
+			l.log.WithField("workflow", m).WithError(err).Warn(context.Background(), "Failed to decompress workflow object")
+			continue
+		}
+		wf, err := FromUnstructured(un)
 		if err != nil {
 			l.log.WithField("workflow", m).WithError(err).Warn(context.Background(), "Failed to unmarshal workflow object")
 			continue

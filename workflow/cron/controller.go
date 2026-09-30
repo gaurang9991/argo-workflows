@@ -8,8 +8,8 @@ import (
 
 	"github.com/argoproj/pkg/sync"
 	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -27,6 +27,7 @@ import (
 	"github.com/argoproj/argo-workflows/v4/pkg/apis/workflow/v1alpha1"
 	"github.com/argoproj/argo-workflows/v4/pkg/client/clientset/versioned"
 	wfextvv1alpha1 "github.com/argoproj/argo-workflows/v4/pkg/client/informers/externalversions/workflow/v1alpha1"
+	"github.com/argoproj/argo-workflows/v4/util/compress"
 	"github.com/argoproj/argo-workflows/v4/util/env"
 	informerutil "github.com/argoproj/argo-workflows/v4/util/informer"
 	"github.com/argoproj/argo-workflows/v4/util/logging"
@@ -109,7 +110,7 @@ func (cc *Controller) Run(ctx context.Context) {
 		cronWfInformerListOptionsFunc(options, cc.instanceID)
 	}).ForResource(schema.GroupVersionResource{Group: workflow.Group, Version: workflow.Version, Resource: workflow.CronWorkflowPlural})
 	//nolint:errcheck // the error only happens if the informer was already started, and it hasn't been
-	cc.cronWfInformer.Informer().SetTransform(informerutil.StripManagedFields)
+	cc.cronWfInformer.Informer().SetTransform(informerutil.Chain(informerutil.StripManagedFields, compress.Transform))
 	err := cc.addCronWorkflowInformerHandler(ctx)
 	if err != nil {
 		cc.logger.WithFatal().Error(ctx, err.Error())
@@ -168,9 +169,9 @@ func (cc *Controller) processNextCronItem(ctx context.Context) bool {
 		return true
 	}
 
-	un, ok := obj.(*unstructured.Unstructured)
-	if !ok {
-		logger.WithField("type", reflect.TypeOf(obj).Name()).Error(ctx, "malformed cluster workflow template: expected *unstructured.Unstructured, got type")
+	un, err := compress.ToUnstructured(obj)
+	if err != nil {
+		logger.WithField("type", reflect.TypeOf(obj).Name()).Error(ctx, "malformed cluster workflow template: expected *unstructured.Unstructured or *compress.Object, got type")
 		return true
 	}
 	cronWf := &v1alpha1.CronWorkflow{}
@@ -220,12 +221,12 @@ func (cc *Controller) addCronWorkflowInformerHandler(ctx context.Context) error 
 	_, err := cc.cronWfInformer.Informer().AddEventHandler(
 		cache.FilteringResourceEventHandler{
 			FilterFunc: func(obj any) bool {
-				un, ok := obj.(*unstructured.Unstructured)
-				if !ok {
+				m, err := meta.Accessor(obj)
+				if err != nil {
 					cc.logger.WithField("obj", obj).Warn(ctx, "Cron Workflow FilterFunc: is not an unstructured")
 					return false
 				}
-				return !isCompleted(un)
+				return !isCompleted(m)
 			},
 			Handler: cache.ResourceEventHandlerFuncs{
 				AddFunc: func(obj any) {
@@ -275,13 +276,13 @@ func (cc *Controller) syncAll(ctx context.Context) {
 
 	cronWorkflows := cc.cronWfInformer.Informer().GetStore().List()
 	for _, obj := range cronWorkflows {
-		un, ok := obj.(*unstructured.Unstructured)
-		if !ok {
+		un, err := compress.ToUnstructured(obj)
+		if err != nil {
 			cc.logger.Error(ctx, "Unable to convert object to unstructured when syncing CronWorkflows")
 			continue
 		}
 		cronWf := &v1alpha1.CronWorkflow{}
-		err := util.FromUnstructuredObj(un, cronWf)
+		err = util.FromUnstructuredObj(un, cronWf)
 		if err != nil {
 			cc.logger.WithError(err).Error(ctx, "Unable to convert unstructured to CronWorkflow when syncing CronWorkflows")
 			continue
